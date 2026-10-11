@@ -3,6 +3,18 @@ import os
 import sys
 from pathlib import Path
 
+# Reconfigure stdout and stderr for UTF-8 on Windows to safely print Tamil characters
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # Add engine to path
 sys.path.append(str(Path(__file__).parent))
 
@@ -11,10 +23,11 @@ from engine.dot_generator import generate_custom_dots, generate_8x2_dots
 from engine.path_generator import generate_path_for_type
 from engine.renderer import render_kolam_video
 from engine.thumbnail_generator import generate_kolam_thumbnail
+from engine.seo_generator import generate_dynamic_seo_metadata, save_metadata_to_file
 
 def main():
     parser = argparse.ArgumentParser(description="Headless Kolam Video Generator - YouTube Shorts Ready")
-    parser.add_argument("--input", "-i", required=True, help="Input sketch image (mandala/rangoli/pulli/sikku)")
+    parser.add_argument("--input", "-i", default=None, help="Input sketch image (auto-detects from inputs/ if not provided)")
     parser.add_argument("--output", "-o", default="outputs/kolam_shorts.mp4", help="Output video path")
     parser.add_argument("--type", "-t", default="auto", choices=["auto","pulli_kolam","sikku_kolam","rangoli","mandala"], help="Kolam type, auto detects")
     parser.add_argument("--grid", "-g", default="8x2", help="Dot grid: 8x2, 6x2, etc")
@@ -26,6 +39,16 @@ def main():
     
     args = parser.parse_args()
     
+    if not args.input:
+        inputs_dir = Path("inputs")
+        candidate_images = list(inputs_dir.glob("*.jpg")) + list(inputs_dir.glob("*.png")) + list(inputs_dir.glob("*.jpeg"))
+        if candidate_images:
+            args.input = str(candidate_images[0])
+            print(f"[AUTO-DETECT] Found input image: {args.input}")
+        else:
+            print("[ERROR] No input image provided and no image found in inputs/ folder!")
+            sys.exit(1)
+            
     print("=== Headless Kolam Generator ===")
     print(f"Input: {args.input}")
     
@@ -102,11 +125,38 @@ def main():
         print(f"Thumbnail: {thumbnail_path}")
     print(f"Ready to upload to YouTube Shorts!")
     print(f"Specs: 1080x1920, {args.fps}fps, H.264, <60s, vertical")
-    print("\nYouTube metadata suggestion:")
-    title_grid = f" | {grid} Dots Kolam" if grid and grid != "none" else ""
-    print(f"Title: {kolam_type.replace('_',' ').title()}{title_grid} | Easy Rangoli Shorts")
-    print(f"Description: Beautiful {kolam_type} generated from sketch. #kolam #rangoli #muggulu #shorts")
-    print("Hashtags: #kolam #rangoli #muggulu #sikkuKolam #pulliKolam #rangoliDesign #youtubeShorts")
+    # 6. Dynamic Bilingual SEO Metadata Suggestion (Tamil + English)
+    print("\n[6/6] Generating Dynamic High-Engagement SEO Metadata (Tamil + English)...")
+    valid_points = [p for p in path if p is not None] if path else []
+    duration_sec = max(15, int(len(valid_points) / 15 / max(1, args.fps)))
+    
+    metadata = generate_dynamic_seo_metadata(
+        image_path=args.input,
+        kolam_type=kolam_type,
+        grid=grid,
+        dots=dots,
+        path=path,
+        duration_seconds=duration_sec,
+        channel_name=args.title
+    )
+    
+    meta_path = save_metadata_to_file(
+        meta_dict=metadata,
+        output_video_path=output,
+        thumbnail_path=thumbnail_path,
+        channel_name=args.title
+    )
+
+    print("\n" + "="*50)
+    print(f"📺 DYNAMIC HIGH-ENGAGEMENT SEO METADATA (TAMIL + ENGLISH) - {args.title}")
+    print("="*50)
+    print(f"Detected Motif: {metadata['motif'].upper()} | Duration: ~{duration_sec}s")
+    print(f"\n📌 TITLE (Click-Worthy & Search Optimized):\n{metadata['title']}\n")
+    print(f"📝 DESCRIPTION:\n{metadata['description']}\n")
+    print(f"🏷️ TAGS:\n{metadata['tags']}\n")
+    if meta_path:
+        print(f"📁 Saved to text file: {meta_path}")
+    print("="*50)
 
 if __name__ == "__main__":
     main()
