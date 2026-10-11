@@ -1,5 +1,13 @@
-﻿# Archives & Backups
+# Archives & Backups
 *.zip
 *.tar.gz
 *.rar
 *.7z
+
+# YouTube OAuth Credentials & Tokens
+client_secrets*.json
+client_secret*.json
+!client_secrets.json.example
+youtube_token.pickle
+youtube_token.json
+

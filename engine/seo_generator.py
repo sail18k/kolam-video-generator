@@ -156,12 +156,30 @@ def generate_dynamic_seo_metadata(
         construct_ta = "புள்ளி இல்லாத"
         construct_en = "Without Dots"
 
+def build_safe_title(channel_name, title_ta, title_en, hook_en=None, max_len=95):
+    """
+    Constructs an engaging bilingual title that is strictly under max_len characters (YouTube limit is 100).
+    """
+    if hook_en:
+        candidate = f"{channel_name} | {title_ta} | {title_en} ({hook_en}) #shorts"
+        if len(candidate) <= max_len:
+            return candidate
+    candidate = f"{channel_name} | {title_ta} | {title_en} #shorts"
+    if len(candidate) <= max_len:
+        return candidate
+    avail = max_len - len(f"{channel_name} | {title_ta} |  #shorts")
+    trimmed_en = title_en[:avail].rstrip()
+    if " " in trimmed_en:
+        trimmed_en = trimmed_en.rsplit(" ", 1)[0]
+    return f"{channel_name} | {title_ta} | {trimmed_en} #shorts"
+
+
     # --- Motif-Specific Dynamic Content ---
     if motif == "bell":
         title_ta = f"வெள்ளிக்கிழமை பூஜை மணி கோலம் 🔔"
         title_en = f"Friday Pooja Bell Rangoli"
-        hook_en = f"{construct_en} | {speed_en}"
-        seo_title = f"{channel_name} | {title_ta} | {title_en} {hook_en} #shorts #kolam"
+        hook_en = construct_en
+        seo_title = build_safe_title(channel_name, title_ta, title_en, hook_en)
 
         desc_intro = f"""🔔 {channel_name} - Friday Special Temple Bell Rangoli | வெள்ளிக்கிழமை பூஜை மணி கோலம்
 
@@ -180,9 +198,9 @@ Learn how to draw a sacred Temple Bell Rangoli for Friday morning pooja and fest
         sym_desc_en = f"{sym}-Petal " if sym in [6, 8, 12] else ""
 
         title_ta = f"{sym_desc_ta}தாமரை ரங்கோலி கோலம் 🌸"
-        title_en = f"{sym_desc_en}Lotus Rangoli Design"
-        hook_en = f"{construct_en} | {speed_en}"
-        seo_title = f"{channel_name} | {title_ta} | {title_en} {hook_en} #shorts #kolam"
+        title_en = f"{sym_desc_en}Lotus Rangoli"
+        hook_en = construct_en
+        seo_title = build_safe_title(channel_name, title_ta, title_en, hook_en)
 
         desc_intro = f"""🌸 {channel_name} - {sym_desc_en}Lotus Rangoli / தாமரை மலர் கோலம்
 
@@ -199,8 +217,8 @@ Beautiful {sym_desc_en.lower()}Lotus Rangoli design for Lakshmi Pooja, Friday wo
     elif motif == "sikku":
         title_ta = f"{construct_ta} சுலபமான சிக்கு கோலம் ✨"
         title_en = f"Easy {construct_en} Sikku Kolam"
-        hook_en = f"{speed_en} Tutorial"
-        seo_title = f"{channel_name} | {title_ta} | {title_en} {hook_en} #shorts #kolam"
+        hook_en = speed_en
+        seo_title = build_safe_title(channel_name, title_ta, title_en, hook_en)
 
         desc_intro = f"""🌀 {channel_name} - Traditional Sikku Kolam / சுலபமான சிக்கு சுழி கோலம்
 
@@ -217,8 +235,8 @@ Traditional South Indian Sikku / Suzhi Kolam tutorial. Master the smooth interlo
     elif motif == "pulli":
         title_ta = f"{construct_ta} நேர் புள்ளி கோலம் 🌾"
         title_en = f"Simple {construct_en} Pulli Kolam"
-        hook_en = f"Daily Morning {speed_en}"
-        seo_title = f"{channel_name} | {title_ta} | {title_en} {hook_en} #shorts #kolam"
+        hook_en = "Daily Kolam"
+        seo_title = build_safe_title(channel_name, title_ta, title_en, hook_en)
 
         desc_intro = f"""🌾 {channel_name} - Daily Dot Kolam / எளிய புள்ளி கோலம்
 
@@ -235,8 +253,8 @@ Simple and clean Pulli Kolam with {construct_en.lower()} for daily morning pract
     elif motif == "mandala":
         title_ta = f"வட்ட வடிவ வண்ண மண்டலா கோலம் 🎨"
         title_en = f"Circular Mandala Rangoli"
-        hook_en = f"{construct_en} | {speed_en}"
-        seo_title = f"{channel_name} | {title_ta} | {title_en} {hook_en} #shorts #kolam"
+        hook_en = construct_en
+        seo_title = build_safe_title(channel_name, title_ta, title_en, hook_en)
 
         desc_intro = f"""🎨 {channel_name} - Circular Mandala Rangoli / வண்ணமயமான மண்டலா கோலம்
 
@@ -253,8 +271,8 @@ Vibrant concentric circular Mandala Rangoli design for festive occasions and cel
     else:
         title_ta = f"அழகான வண்ண ரங்கோலி கோலம் 🌸"
         title_en = f"Beautiful Color Rangoli Design"
-        hook_en = f"{construct_en} | {speed_en}"
-        seo_title = f"{channel_name} | {title_ta} | {title_en} {hook_en} #shorts #kolam"
+        hook_en = construct_en
+        seo_title = build_safe_title(channel_name, title_ta, title_en, hook_en)
 
         desc_intro = f"""🌸 {channel_name} - Beautiful Daily Rangoli / அழகான வண்ண ரங்கோலி கோலம்
 

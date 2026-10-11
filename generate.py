@@ -36,6 +36,9 @@ def main():
     parser.add_argument("--no-watermark", action="store_true", help="Disable footer watermark (Like, Share, Subscribe)")
     parser.add_argument("--no-thumbnail", action="store_true", help="Disable YouTube Short thumbnail generation")
     parser.add_argument("--title", default="AK Kolam", help="Header title for video and thumbnail (default: AK Kolam)")
+    parser.add_argument("--upload", action="store_true", help="Auto-upload video and thumbnail to YouTube after generation")
+    parser.add_argument("--no-upload", action="store_true", help="Skip YouTube upload prompt completely")
+    parser.add_argument("--privacy", default="public", choices=["public", "unlisted", "private"], help="YouTube privacy status (default: public)")
     
     args = parser.parse_args()
     
@@ -157,6 +160,25 @@ def main():
     if meta_path:
         print(f"📁 Saved to text file: {meta_path}")
     print("="*50)
+
+    # 7. YouTube Upload Option
+    if not args.no_upload and meta_path:
+        should_upload = args.upload
+        if not should_upload:
+            print("\n" + "="*50)
+            try:
+                ans = input("📤 Do you want to upload this video to YouTube? (y/n) [default: n]: ").strip().lower()
+                should_upload = ans in ["y", "yes"]
+            except (EOFError, KeyboardInterrupt):
+                should_upload = False
+
+        if should_upload:
+            from engine.youtube_uploader import upload_from_metadata_file
+            print("\n[YOUTUBE] Starting YouTube upload...")
+            upload_from_metadata_file(meta_path, privacy_status=args.privacy)
+        else:
+            print("\n💡 YouTube upload skipped.")
+            print(f"   You can upload anytime later by running: upload_to_youtube.bat\n")
 
 if __name__ == "__main__":
     main()
