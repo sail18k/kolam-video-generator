@@ -32,7 +32,35 @@ echo [INFO] Using input image: %INPUT_FILE%
 echo [INFO] Starting automatic setup and generation...
 echo.
 
-python -u generate.py --input "%INPUT_FILE%" --type auto
+:: 1. Run video generation, natural coloring thumbnail, and dynamic SEO metadata
+python -u generate.py --input "%INPUT_FILE%" --type auto --no-upload
+
+if errorlevel 1 (
+    echo.
+    echo ===================================================
+    echo [ERROR] Video generation failed. Please check the logs above.
+    echo ===================================================
+    pause
+    exit /b %errorlevel%
+)
+
+:: 2. Interactive YouTube Upload Prompt
+echo.
+echo ===================================================
+echo              YOUTUBE UPLOAD (Auto-Publish)
+echo ===================================================
+set "DO_UPLOAD="
+set /p "DO_UPLOAD=Do you want to upload and publish this video to YouTube? (y/n) [default: n]: "
+
+if /i "!DO_UPLOAD!"=="y" (
+    echo.
+    echo [INFO] Uploading video and thumbnail to YouTube...
+    python -u upload_to_youtube.py --yes
+) else (
+    echo.
+    echo [INFO] YouTube upload skipped.
+    echo [INFO] You can upload anytime later by running: upload_to_youtube.bat
+)
 
 echo.
 echo ===================================================

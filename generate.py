@@ -1,7 +1,17 @@
 import argparse
 import os
 import sys
+import socket
 from pathlib import Path
+
+# Force IPv4 resolution to prevent Windows IPv6 timeout (WinError 10060)
+try:
+    _orig_getaddrinfo = socket.getaddrinfo
+    def _ipv4_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+    socket.getaddrinfo = _ipv4_getaddrinfo
+except Exception:
+    pass
 
 # Reconfigure stdout and stderr for UTF-8 on Windows to safely print Tamil characters
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
@@ -142,6 +152,14 @@ def main():
         duration_seconds=duration_sec,
         channel_name=args.title
     )
+    
+    if not metadata:
+        metadata = {
+            "title": f"{args.title} | அழகான ரங்கோலி கோலம் 🌸 Easy Kolam Design #shorts",
+            "description": f"🌸 {args.title} - Daily Simple & Beautiful Kolam Designs.\n\nSubscribe to @AKKolam for more daily fresh tutorials!\n\n#AKKolam #Kolam #Rangoli #Shorts",
+            "tags": f"{args.title}, kolam, rangoli, muggulu, shorts",
+            "motif": "kolam"
+        }
     
     meta_path = save_metadata_to_file(
         meta_dict=metadata,

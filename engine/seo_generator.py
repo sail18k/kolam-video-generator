@@ -116,6 +116,24 @@ def analyze_artwork_motifs(image_path, kolam_type="auto", grid="none", dots=None
     }
 
 
+def build_safe_title(channel_name, title_ta, title_en, hook_en=None, max_len=95):
+    """
+    Constructs an engaging bilingual title that is strictly under max_len characters (YouTube limit is 100).
+    """
+    if hook_en:
+        candidate = f"{channel_name} | {title_ta} | {title_en} ({hook_en}) #shorts"
+        if len(candidate) <= max_len:
+            return candidate
+    candidate = f"{channel_name} | {title_ta} | {title_en} #shorts"
+    if len(candidate) <= max_len:
+        return candidate
+    avail = max_len - len(f"{channel_name} | {title_ta} |  #shorts")
+    trimmed_en = title_en[:avail].rstrip()
+    if " " in trimmed_en:
+        trimmed_en = trimmed_en.rsplit(" ", 1)[0]
+    return f"{channel_name} | {title_ta} | {trimmed_en} #shorts"
+
+
 def generate_dynamic_seo_metadata(
     image_path,
     kolam_type="auto",
@@ -155,24 +173,6 @@ def generate_dynamic_seo_metadata(
     else:
         construct_ta = "புள்ளி இல்லாத"
         construct_en = "Without Dots"
-
-def build_safe_title(channel_name, title_ta, title_en, hook_en=None, max_len=95):
-    """
-    Constructs an engaging bilingual title that is strictly under max_len characters (YouTube limit is 100).
-    """
-    if hook_en:
-        candidate = f"{channel_name} | {title_ta} | {title_en} ({hook_en}) #shorts"
-        if len(candidate) <= max_len:
-            return candidate
-    candidate = f"{channel_name} | {title_ta} | {title_en} #shorts"
-    if len(candidate) <= max_len:
-        return candidate
-    avail = max_len - len(f"{channel_name} | {title_ta} |  #shorts")
-    trimmed_en = title_en[:avail].rstrip()
-    if " " in trimmed_en:
-        trimmed_en = trimmed_en.rsplit(" ", 1)[0]
-    return f"{channel_name} | {title_ta} | {trimmed_en} #shorts"
-
 
     # --- Motif-Specific Dynamic Content ---
     if motif == "bell":

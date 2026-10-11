@@ -1,7 +1,17 @@
 import os
 import sys
 import argparse
+import socket
 from pathlib import Path
+
+# Force IPv4 resolution to prevent Windows IPv6 timeout (WinError 10060)
+try:
+    _orig_getaddrinfo = socket.getaddrinfo
+    def _ipv4_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+    socket.getaddrinfo = _ipv4_getaddrinfo
+except Exception:
+    pass
 
 # Reconfigure stdout and stderr for UTF-8 on Windows
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
@@ -53,8 +63,20 @@ def main():
     parser.add_argument("--desc", help="Custom video description")
     parser.add_argument("--privacy", "-p", default="public", choices=["public", "unlisted", "private"], help="Privacy status (default: public)")
     parser.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
+    parser.add_argument("--reset-auth", action="store_true", help="Reset authentication to select a different YouTube channel")
 
     args = parser.parse_args()
+
+    if args.reset_auth:
+        token_p = Path("youtube_token.pickle")
+        if token_p.exists():
+            token_p.unlink()
+            print("[AUTH] Reset complete: removed cached youtube_token.pickle.")
+        else:
+            print("[AUTH] No cached token was found.")
+        print("[AUTH] Ready to select a new YouTube channel on next upload.")
+        if not args.metadata and not args.video:
+            sys.exit(0)
 
     print("=" * 60)
     print("      AK KOLAM - YOUTUBE UPLOADER TOOL")

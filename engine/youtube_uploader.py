@@ -2,7 +2,17 @@ import os
 import sys
 import re
 import pickle
+import socket
 from pathlib import Path
+
+# Force IPv4 resolution to prevent Windows IPv6 timeout (WinError 10060)
+try:
+    _orig_getaddrinfo = socket.getaddrinfo
+    def _ipv4_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+    socket.getaddrinfo = _ipv4_getaddrinfo
+except Exception:
+    pass
 
 # Reconfigure stdout and stderr for UTF-8 on Windows
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
@@ -125,10 +135,10 @@ def get_authenticated_service(client_secrets_file=None, token_pickle="youtube_to
                 return None
 
             print(f"[AUTH] Found credentials: {secrets_path}")
-            print("[AUTH] Launching browser for one-time Google OAuth authorization...")
+            print("[AUTH] Launching browser to select your Google Account / YouTube Channel...")
             try:
                 flow = InstalledAppFlow.from_client_secrets_file(secrets_path, SCOPES)
-                creds = flow.run_local_server(port=0)
+                creds = flow.run_local_server(port=0, prompt="select_account")
             except Exception as e:
                 print(f"[AUTH] OAuth authentication error: {e}")
                 return None
@@ -141,7 +151,16 @@ def get_authenticated_service(client_secrets_file=None, token_pickle="youtube_to
         except Exception as e:
             print(f"[AUTH] Warning: Failed to save token: {e}")
 
-    return build("youtube", "v3", credentials=creds)
+    service = build("youtube", "v3", credentials=creds)
+    try:
+        ch_resp = service.channels().list(part="snippet", mine=True).execute()
+        if ch_resp.get("items"):
+            ch_name = ch_resp["items"][0]["snippet"]["title"]
+            print(f"[AUTH] Connected to YouTube Channel: 🎬 {ch_name}")
+    except Exception:
+        pass
+
+    return service
 
 
 def parse_metadata_file(metadata_path):
