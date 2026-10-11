@@ -1,9 +1,4 @@
-﻿# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*.class
-
-# Archives & Backups
+﻿# Archives & Backups
 *.zip
 *.tar.gz
 *.rar
@@ -15,21 +10,3 @@ temp_*/
 outputs/
 *.mp4
 !inputs/reference.mp4
-
-# Virtual Environments
-.env
-.venv
-env/
-venv/
-ENV/
-
-# IDE & Editor files
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS generated files
-Thumbs.db
-Desktop.ini
-.DS_Store
