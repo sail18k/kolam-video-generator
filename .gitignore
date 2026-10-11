@@ -3,10 +3,3 @@
 *.tar.gz
 *.rar
 *.7z
-backup*/
-temp_*/
-
-# Video output & renders
-outputs/
-*.mp4
-!inputs/reference.mp4
