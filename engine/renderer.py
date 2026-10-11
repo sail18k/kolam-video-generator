@@ -2,6 +2,159 @@ import cv2
 import numpy as np
 import os
 from pathlib import Path
+from PIL import Image, ImageDraw, ImageFont
+
+def create_footer_watermark(width=1080, height=1920):
+    """Generate high-quality Subscribe, Like, and Share footer watermark badge"""
+    overlay = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    
+    bw, bh = 880, 84
+    bx = (width - bw) // 2
+    by = 1730  # Positioned in mobile safe zone (footer area)
+    
+    # 1. Soft drop shadow behind the pill
+    draw.rounded_rectangle(
+        [bx - 2, by + 4, bx + bw + 2, by + bh + 8],
+        radius=44,
+        fill=(0, 0, 0, 140)
+    )
+    
+    # 2. Translucent glassmorphism pill container
+    draw.rounded_rectangle(
+        [bx, by, bx + bw, by + bh],
+        radius=42,
+        fill=(15, 17, 23, 220),
+        outline=(255, 255, 255, 75),
+        width=2
+    )
+    
+    # Fonts
+    try:
+        font_btn = ImageFont.truetype('arialbd.ttf', 28)
+        font_sub = ImageFont.truetype('arialbd.ttf', 26)
+    except Exception:
+        font_btn = ImageFont.load_default()
+        font_sub = font_btn
+        
+    has_emoji = False
+    try:
+        font_emoji = ImageFont.truetype('seguiemj.ttf', 32)
+        has_emoji = True
+    except Exception:
+        pass
+        
+    # --- 1. LIKE SECTION ---
+    like_drawn = False
+    if has_emoji:
+        try:
+            draw.text((bx + 55, by + 19), '👍', font=font_emoji, embedded_color=True)
+            draw.text((bx + 105, by + 25), 'LIKE', font=font_btn, fill=(255, 255, 255, 245))
+            like_drawn = True
+        except Exception:
+            like_drawn = False
+            
+    if not like_drawn:
+        # Vector heart icon fallback
+        r = 13
+        cx, cy = bx + 68, by + bh // 2 - 2
+        draw.ellipse([cx - r - 2, cy - r, cx + 2, cy + r], fill=(255, 60, 95, 255))
+        draw.ellipse([cx - 2, cy - r, cx + r + 2, cy + r], fill=(255, 60, 95, 255))
+        draw.polygon([(cx - r - 2, cy + 2), (cx + r + 2, cy + 2), (cx, cy + r + 9)], fill=(255, 60, 95, 255))
+        draw.text((bx + 95, by + 25), 'LIKE', font=font_btn, fill=(255, 255, 255, 245))
+        
+    # Divider 1
+    div1_x = bx + 265
+    draw.line([(div1_x, by + 18), (div1_x, by + bh - 18)], fill=(255, 255, 255, 55), width=2)
+    
+    # --- 2. SHARE SECTION ---
+    pts_share = [
+        (bx + 325 + 8, by + bh // 2 - 16),
+        (bx + 325 + 22, by + bh // 2),
+        (bx + 325 + 8, by + bh // 2 + 16),
+        (bx + 325 + 8, by + bh // 2 + 7),
+        (bx + 325 - 16, by + bh // 2 + 7),
+        (bx + 325 - 16, by + bh // 2 - 3),
+        (bx + 325 + 8, by + bh // 2 - 3),
+    ]
+    draw.polygon(pts_share, fill=(45, 195, 255, 255))
+    draw.text((bx + 360, by + 25), 'SHARE', font=font_btn, fill=(255, 255, 255, 245))
+    
+    # Divider 2
+    div2_x = bx + 540
+    draw.line([(div2_x, by + 18), (div2_x, by + bh - 18)], fill=(255, 255, 255, 55), width=2)
+    
+    # --- 3. SUBSCRIBE BUTTON ---
+    sub_x = bx + 555
+    sub_w = 310
+    sub_h = 60
+    sub_y = by + (bh - sub_h) // 2
+    
+    # YouTube Red badge
+    draw.rounded_rectangle(
+        [sub_x, sub_y, sub_x + sub_w, sub_y + sub_h],
+        radius=30,
+        fill=(225, 25, 35, 245),
+        outline=(255, 120, 120, 120),
+        width=1
+    )
+    
+    bell_drawn = False
+    if has_emoji:
+        try:
+            draw.text((sub_x + 22, sub_y + 11), '🔔', font=font_emoji, embedded_color=True)
+            draw.text((sub_x + 72, sub_y + 14), 'SUBSCRIBE', font=font_sub, fill=(255, 255, 255, 255))
+            bell_drawn = True
+        except Exception:
+            bell_drawn = False
+            
+    if not bell_drawn:
+        # Vector bell icon
+        cx, cy = sub_x + 36, sub_y + sub_h // 2
+        draw.ellipse([cx - 3, cy - 15, cx + 3, cy - 11], fill=(255, 255, 255, 255))
+        pts_bell = [
+            (cx - 9, cy + 7), (cx - 7, cy - 4), (cx - 4, cy - 11),
+            (cx + 4, cy - 11), (cx + 7, cy - 4), (cx + 9, cy + 7)
+        ]
+        draw.polygon(pts_bell, fill=(255, 255, 255, 255))
+        draw.rounded_rectangle([cx - 12, cy + 6, cx + 12, cy + 9], radius=2, fill=(255, 255, 255, 255))
+        draw.ellipse([cx - 4, cy + 9, cx + 4, cy + 14], fill=(255, 255, 255, 255))
+        draw.text((sub_x + 60, sub_y + 14), 'SUBSCRIBE', font=font_sub, fill=(255, 255, 255, 255))
+        
+    # Crop to active bounding box for ultra-fast frame blending
+    pad = 12
+    x1 = max(0, bx - pad)
+    y1 = max(0, by - pad)
+    x2 = min(width, bx + bw + pad)
+    y2 = min(height, by + bh + pad + 8)
+    
+    crop = overlay.crop((x1, y1, x2, y2))
+    crop_np = np.array(crop)
+    
+    bgr_crop = cv2.cvtColor(crop_np[:, :, :3], cv2.COLOR_RGB2BGR)
+    alpha_crop = crop_np[:, :, 3].astype(np.float32) / 255.0
+    alpha_crop = np.expand_dims(alpha_crop, axis=-1)
+    
+    return {
+        'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
+        'bgr': bgr_crop,
+        'alpha': alpha_crop
+    }
+
+def apply_footer_watermark(frame, watermark_data, opacity=1.0):
+    """Blends the pre-computed watermark onto the target frame with optional opacity"""
+    if watermark_data is None or opacity <= 0.0:
+        return frame
+    x1, y1 = watermark_data['x1'], watermark_data['y1']
+    x2, y2 = watermark_data['x2'], watermark_data['y2']
+    
+    roi = frame[y1:y2, x1:x2].astype(np.float32)
+    bgr = watermark_data['bgr'].astype(np.float32)
+    alpha = watermark_data['alpha'] * float(opacity)
+    
+    blended = (1.0 - alpha) * roi + alpha * bgr
+    frame[y1:y2, x1:x2] = blended.astype(np.uint8)
+    return frame
 
 def load_and_prepare_hand(hand_path, target_width=380):
     """Load hand image and remove white background, resize"""
@@ -74,9 +227,12 @@ def overlay_hand(background, hand_img, pen_tip_pos, angle_offset=0):
     
     return background
 
-def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, line_thickness=6):
+def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, line_thickness=6, show_watermark=True):
     """Headless renderer - exact replica of reference video"""
     width, height = 1080, 1920
+    
+    # Prepare footer watermark (Subscribe, Like, Share)
+    watermark_data = create_footer_watermark(width, height) if show_watermark else None
     
     # Load wood background and resize to 1080x1920
     wood = cv2.imread(wood_path)
@@ -171,6 +327,11 @@ def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, li
                     # Draw small pen indicator if no hand
                     cv2.circle(frame, tip_pos, 8, (255, 200, 200), -1)
             
+            # Apply footer watermark (Like, Share, Subscribe)
+            if watermark_data is not None:
+                fade = min(1.0, (frame_count + 1) / 15.0) if frame_count < 15 else 1.0
+                frame = apply_footer_watermark(frame, watermark_data, opacity=fade)
+            
             if use_ffmpeg:
                 process.stdin.write(frame.tobytes())
             else:
@@ -190,6 +351,8 @@ def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, li
     
     # Hold final frame for 1 second (25 frames)
     final_frame = canvas.copy()
+    if watermark_data is not None:
+        final_frame = apply_footer_watermark(final_frame, watermark_data, opacity=1.0)
     if use_ffmpeg:
         for _ in range(fps):
             process.stdin.write(final_frame.tobytes())

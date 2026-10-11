@@ -10,6 +10,7 @@ from engine.classifier import classify_kolam_local_llm, classify_heuristic
 from engine.dot_generator import generate_custom_dots, generate_8x2_dots
 from engine.path_generator import generate_path_for_type
 from engine.renderer import render_kolam_video
+from engine.thumbnail_generator import generate_kolam_thumbnail
 
 def main():
     parser = argparse.ArgumentParser(description="Headless Kolam Video Generator - YouTube Shorts Ready")
@@ -19,6 +20,8 @@ def main():
     parser.add_argument("--grid", "-g", default="8x2", help="Dot grid: 8x2, 6x2, etc")
     parser.add_argument("--fps", type=int, default=25, help="FPS (25 for YouTube Shorts)")
     parser.add_argument("--no-hand", action="store_true", help="Disable hand overlay")
+    parser.add_argument("--no-watermark", action="store_true", help="Disable footer watermark (Like, Share, Subscribe)")
+    parser.add_argument("--no-thumbnail", action="store_true", help="Disable YouTube Short thumbnail generation")
     
     args = parser.parse_args()
     
@@ -68,11 +71,32 @@ def main():
         wood_path=wood_path,
         hand_path=hand_path if not args.no_hand else "engine/assets/hand_raw.png",
         output_path=args.output,
-        fps=args.fps
+        fps=args.fps,
+        show_watermark=not args.no_watermark
     )
     
+    # 5. Generate YouTube Short Thumbnail image
+    thumbnail_path = None
+    if not args.no_thumbnail:
+        print("\n[5/5] Generating YouTube Short thumbnail with natural Kolam colors...")
+        thumb_output = os.path.splitext(output)[0] + "_thumbnail.jpg"
+        try:
+            thumbnail_path = generate_kolam_thumbnail(
+                input_image_path=args.input,
+                output_thumbnail_path=thumb_output,
+                kolam_type=kolam_type,
+                grid=grid,
+                wood_path=wood_path,
+                dots=dots
+            )
+            print(f"  -> Thumbnail saved: {thumbnail_path}")
+        except Exception as e:
+            print(f"  -> Warning: Failed to generate thumbnail: {e}")
+            
     print("\n=== DONE ===")
     print(f"Video: {output}")
+    if thumbnail_path:
+        print(f"Thumbnail: {thumbnail_path}")
     print(f"Ready to upload to YouTube Shorts!")
     print(f"Specs: 1080x1920, {args.fps}fps, H.264, <60s, vertical")
     print("\nYouTube metadata suggestion:")
