@@ -135,7 +135,8 @@ def generate_kolam_thumbnail(
     wood_path="engine/assets/wood.jpg",
     dots=None,
     width=1080,
-    height=1920
+    height=1920,
+    title="AK Kolam"
 ):
     """
     Creates a captivating, high-CTR YouTube Short thumbnail (1080x1920, 9:16)
@@ -254,10 +255,11 @@ def generate_kolam_thumbnail(
         font_title = ImageFont.load_default()
         font_sub = font_title
 
-    # Top Title Badge
-    title_text = get_title_for_kolam(kolam_type, grid)
+    # Top Title Badge (AK Kolam)
+    title_text = title if title else "AK Kolam"
     bbox_t = draw.textbbox((0, 0), title_text, font=font_title)
     t_w = bbox_t[2] - bbox_t[0]
+    t_h = bbox_t[3] - bbox_t[1]
     badge_w = t_w + 90
     badge_h = 76
     bx = (width - badge_w) // 2
@@ -272,7 +274,9 @@ def generate_kolam_thumbnail(
         outline=(255, 215, 0, 160),
         width=2
     )
-    draw.text((bx + 45, by + 14), title_text, font=font_title, fill=(255, 245, 220))
+    tx = bx + (badge_w - t_w) // 2
+    ty = by + (badge_h - t_h) // 2 - 2
+    draw.text((tx, ty), title_text, font=font_title, fill=(255, 245, 220))
 
     # Bottom Pill Badge: "EASY STEP-BY-STEP TUTORIAL"
     bot_text = "EASY STEP-BY-STEP TUTORIAL"

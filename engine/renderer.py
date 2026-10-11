@@ -156,6 +156,56 @@ def apply_footer_watermark(frame, watermark_data, opacity=1.0):
     frame[y1:y2, x1:x2] = blended.astype(np.uint8)
     return frame
 
+def create_header_title(title="AK Kolam", width=1080, height=1920):
+    """Generate high-quality header title pill badge (e.g. AK Kolam)"""
+    if not title:
+        return None
+    overlay = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    
+    try:
+        font = ImageFont.truetype('arialbd.ttf', 38)
+    except Exception:
+        font = ImageFont.load_default()
+        
+    bbox = draw.textbbox((0, 0), title, font=font)
+    tw = bbox[2] - bbox[0]
+    th = bbox[3] - bbox[1]
+    
+    bw = tw + 80
+    bh = 72
+    bx = (width - bw) // 2
+    by = 130
+    
+    # Soft drop shadow
+    draw.rounded_rectangle([bx - 2, by + 4, bx + bw + 2, by + bh + 6], radius=36, fill=(0, 0, 0, 140))
+    # Frosted glass pill body with subtle gold border
+    draw.rounded_rectangle(
+        [bx, by, bx + bw, by + bh],
+        radius=36,
+        fill=(15, 17, 23, 220),
+        outline=(255, 215, 0, 160),
+        width=2
+    )
+    
+    # Center text
+    tx = bx + (bw - tw) // 2
+    ty = by + (bh - th) // 2 - 2
+    draw.text((tx, ty), title, font=font, fill=(255, 255, 255, 250))
+    
+    pad = 12
+    x1 = max(0, bx - pad)
+    y1 = max(0, by - pad)
+    x2 = min(width, bx + bw + pad)
+    y2 = min(height, by + bh + pad + 6)
+    
+    crop = overlay.crop((x1, y1, x2, y2))
+    crop_np = np.array(crop)
+    bgr_crop = cv2.cvtColor(crop_np[:, :, :3], cv2.COLOR_RGB2BGR)
+    alpha_crop = (crop_np[:, :, 3].astype(np.float32) / 255.0)[:, :, np.newaxis]
+    
+    return {'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2, 'bgr': bgr_crop, 'alpha': alpha_crop}
+
 def load_and_prepare_hand(hand_path, target_width=380):
     """Load hand image and remove white background, resize"""
     img = cv2.imread(hand_path, cv2.IMREAD_UNCHANGED)
@@ -227,11 +277,12 @@ def overlay_hand(background, hand_img, pen_tip_pos, angle_offset=0):
     
     return background
 
-def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, line_thickness=6, show_watermark=True):
+def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, line_thickness=6, show_watermark=True, title="AK Kolam"):
     """Headless renderer - exact replica of reference video"""
     width, height = 1080, 1920
     
-    # Prepare footer watermark (Subscribe, Like, Share)
+    # Prepare header title (AK Kolam) and footer watermark (Subscribe, Like, Share)
+    header_data = create_header_title(title, width, height) if title else None
     watermark_data = create_footer_watermark(width, height) if show_watermark else None
     
     # Load wood background and resize to 1080x1920
@@ -327,7 +378,11 @@ def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, li
                     # Draw small pen indicator if no hand
                     cv2.circle(frame, tip_pos, 8, (255, 200, 200), -1)
             
-            # Apply footer watermark (Like, Share, Subscribe)
+            # Apply header title (AK Kolam) and footer watermark (Like, Share, Subscribe)
+            if header_data is not None:
+                fade = min(1.0, (frame_count + 1) / 15.0) if frame_count < 15 else 1.0
+                frame = apply_footer_watermark(frame, header_data, opacity=fade)
+            
             if watermark_data is not None:
                 fade = min(1.0, (frame_count + 1) / 15.0) if frame_count < 15 else 1.0
                 frame = apply_footer_watermark(frame, watermark_data, opacity=fade)
@@ -351,6 +406,8 @@ def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, li
     
     # Hold final frame for 1 second (25 frames)
     final_frame = canvas.copy()
+    if header_data is not None:
+        final_frame = apply_footer_watermark(final_frame, header_data, opacity=1.0)
     if watermark_data is not None:
         final_frame = apply_footer_watermark(final_frame, watermark_data, opacity=1.0)
     if use_ffmpeg:

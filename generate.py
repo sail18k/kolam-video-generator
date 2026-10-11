@@ -22,6 +22,7 @@ def main():
     parser.add_argument("--no-hand", action="store_true", help="Disable hand overlay")
     parser.add_argument("--no-watermark", action="store_true", help="Disable footer watermark (Like, Share, Subscribe)")
     parser.add_argument("--no-thumbnail", action="store_true", help="Disable YouTube Short thumbnail generation")
+    parser.add_argument("--title", default="AK Kolam", help="Header title for video and thumbnail (default: AK Kolam)")
     
     args = parser.parse_args()
     
@@ -72,7 +73,8 @@ def main():
         hand_path=hand_path if not args.no_hand else "engine/assets/hand_raw.png",
         output_path=args.output,
         fps=args.fps,
-        show_watermark=not args.no_watermark
+        show_watermark=not args.no_watermark,
+        title=args.title
     )
     
     # 5. Generate YouTube Short Thumbnail image
@@ -87,7 +89,8 @@ def main():
                 kolam_type=kolam_type,
                 grid=grid,
                 wood_path=wood_path,
-                dots=dots
+                dots=dots,
+                title=args.title
             )
             print(f"  -> Thumbnail saved: {thumbnail_path}")
         except Exception as e:
