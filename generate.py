@@ -34,6 +34,7 @@ from engine.path_generator import generate_path_for_type
 from engine.renderer import render_kolam_video
 from engine.thumbnail_generator import generate_kolam_thumbnail
 from engine.seo_generator import generate_dynamic_seo_metadata, save_metadata_to_file
+from engine.audio_processor import merge_instrumental_bgm
 
 def main():
     parser = argparse.ArgumentParser(description="Headless Kolam Video Generator - YouTube Shorts Ready")
@@ -45,6 +46,9 @@ def main():
     parser.add_argument("--no-hand", action="store_true", help="Disable hand overlay")
     parser.add_argument("--no-watermark", action="store_true", help="Disable footer watermark (Like, Share, Subscribe)")
     parser.add_argument("--no-thumbnail", action="store_true", help="Disable YouTube Short thumbnail generation")
+    parser.add_argument("--music-dir", default=r"D:\ncs music", help=r"Directory with background music (default: D:\ncs music)")
+    parser.add_argument("--no-music", action="store_true", help="Disable adding background music")
+    parser.add_argument("--music-volume", type=float, default=1.3, help="Music volume multiplier (default: 1.3)")
     parser.add_argument("--title", default="AK Kolam", help="Header title for video and thumbnail (default: AK Kolam)")
     parser.add_argument("--upload", action="store_true", help="Auto-upload video and thumbnail to YouTube after generation")
     parser.add_argument("--no-upload", action="store_true", help="Skip YouTube upload prompt completely")
@@ -113,10 +117,19 @@ def main():
         title=args.title
     )
     
-    # 5. Generate YouTube Short Thumbnail image
+    # 5. Merge Vocal-Removed Instrumental Background Music
+    if not args.no_music:
+        print(f"\n[5/7] Merging Vocal-Removed Instrumental Background Music ({args.music_dir})...")
+        merge_instrumental_bgm(
+            video_path=output,
+            music_dir=args.music_dir,
+            volume=args.music_volume
+        )
+    
+    # 6. Generate YouTube Short Thumbnail image
     thumbnail_path = None
     if not args.no_thumbnail:
-        print("\n[5/5] Generating YouTube Short thumbnail with natural Kolam colors...")
+        print("\n[6/7] Generating YouTube Short thumbnail with natural Kolam colors...")
         thumb_output = os.path.splitext(output)[0] + "_thumbnail.jpg"
         try:
             thumbnail_path = generate_kolam_thumbnail(
@@ -137,9 +150,9 @@ def main():
     if thumbnail_path:
         print(f"Thumbnail: {thumbnail_path}")
     print(f"Ready to upload to YouTube Shorts!")
-    print(f"Specs: 1080x1920, {args.fps}fps, H.264, <60s, vertical")
-    # 6. Dynamic Bilingual SEO Metadata Suggestion (Tamil + English)
-    print("\n[6/6] Generating Dynamic High-Engagement SEO Metadata (Tamil + English)...")
+    print(f"Specs: 1080x1920, {args.fps}fps, H.264, vertical, with Instrumental BGM")
+    # 7. Dynamic Bilingual SEO Metadata Suggestion (Tamil + English)
+    print("\n[7/7] Generating Dynamic High-Engagement SEO Metadata (Tamil + English)...")
     valid_points = [p for p in path if p is not None] if path else []
     duration_sec = max(15, int(len(valid_points) / 15 / max(1, args.fps)))
     
