@@ -1,5 +1,7 @@
 
-# Headless Kolam Generator - YouTube Shorts Ready
+# Headless Kolam Generator V2 - YouTube Shorts Ready
+
+> 🤖 **AI Agents & Automated Tools:** For complete architecture, hardware specs, module breakdowns, and operational protocols, please read [AI_SYSTEM_DOC.md](file:///d:/kolam%20video%20generation%20v2/AI_SYSTEM_DOC.md).
 
 Dynamic based on input: rangoli / pulli kolam / sikku kolam
 
