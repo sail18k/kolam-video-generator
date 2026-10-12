@@ -2,17 +2,7 @@ import os
 import sys
 import re
 import pickle
-import socket
 from pathlib import Path
-
-# Force IPv4 resolution to prevent Windows IPv6 timeout (WinError 10060)
-try:
-    _orig_getaddrinfo = socket.getaddrinfo
-    def _ipv4_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
-        return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
-    socket.getaddrinfo = _ipv4_getaddrinfo
-except Exception:
-    pass
 
 # Reconfigure stdout and stderr for UTF-8 on Windows
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):

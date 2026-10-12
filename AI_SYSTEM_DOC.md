@@ -49,7 +49,7 @@ All AI agents executing, profiling, or debugging code on this system must accoun
 | **Music Library** | `D:\ncs music` | Contains royalty-free audio tracks (`.mp3`, `.wav`, `.m4a`) |
 
 ### 2.3 Windows Platform Specifics Handled in Code
-1. **IPv6 WinError 10060 Timeout Bypass:** Windows IPv6 dual-stack resolution causes 20+ second delays or connection dropouts when communicating with Google OAuth/YouTube endpoints. The codebase monkey-patches `socket.getaddrinfo` to force IPv4 (`AF_INET`).
+1. **Native IPv6 & Dual-Stack Networking:** Full IPv6 connectivity is active on the host system. Standard Python dual-stack socket resolution functions natively without artificial IPv4 overrides.
 2. **Tamil Unicode Output Encoding:** To prevent Windows console crashes (`cp1252` encoding errors) when printing Tamil characters (e.g., `ரங்கோலி கோலம்`), `sys.stdout` and `sys.stderr` are reconfigured to `utf-8` with `errors="replace"`.
 3. **Piping via Subprocess to FFmpeg:** Video frames are streamed via standard input (`stdin.write(frame.tobytes())`) into a persistent FFmpeg NVENC process to avoid disk I/O bottlenecks.
 
@@ -319,8 +319,7 @@ When interacting with or extending this codebase, all AI agents **must strictly 
    - **Never** add blocking GUI dialogs (e.g., `cv2.imshow()`, `plt.show()`, or Tkinter windows) to core pipelines.
    - All status, progress, and warnings must be routed through `print()` or standard logging.
 
-2. **Preserve Windows System Patches:**
-   - Always retain the IPv4 resolution monkey-patch (`socket.getaddrinfo = _ipv4_getaddrinfo`) in entrypoint scripts. Removing this will cause YouTube API calls to hang on Windows.
+2. **Console Encoding Safety:**
    - Always retain UTF-8 reconfigurations (`sys.stdout.reconfigure(encoding="utf-8")`) to prevent Windows console encoding crashes on Tamil text.
 
 3. **Coordinate & Bounds Checking:**
@@ -343,7 +342,6 @@ When interacting with or extending this codebase, all AI agents **must strictly 
 
 | Symptom | Root Cause | AI Agent Remediation |
 | :--- | :--- | :--- |
-| `WinError 10060` during YouTube upload | Windows attempted IPv6 connection to Google OAuth servers and timed out | Verify `socket.getaddrinfo` is monkey-patched to `AF_INET` at the top of the executing script. |
 | `UnicodeEncodeError: 'charmap' codec can't encode characters` | Windows default console (`cp1252`) attempted to print Tamil Unicode characters | Check that `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` executed before printing. |
 | Hand sprite flickers or jumps erratically | Path contains consecutive `None` values or invalid coordinate jumps | Ensure path interpolation cleans adjacent `None` values and maintains continuous trajectories. |
 | Thumbnail custom upload fails with HTTP 403 | YouTube channel is not phone-verified for custom thumbnails | Normal YouTube policy for new accounts. Video still publishes successfully; thumbnail is already baked into opening video frames as a teaser. |
