@@ -92,10 +92,6 @@ def main():
     print(f"  -> Path with {len(path)} points")
     
     # 4. Render video - exactly like reference
-    print("[4/4] Rendering headless video (YouTube Shorts ready: 1080x1920, 25fps)...")
-    wood_path = "engine/assets/wood.jpg"
-    hand_path = "engine/assets/hand_raw.png" if not args.no_hand else None
-    
     # Generate unique output filename
     if args.output == "outputs/kolam_shorts.mp4":
         import time
@@ -106,31 +102,14 @@ def main():
     # Ensure output dir exists
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
     
-    output = render_kolam_video(
-        dots=dots,
-        path=path,
-        wood_path=wood_path,
-        hand_path=hand_path if not args.no_hand else "engine/assets/hand_raw.png",
-        output_path=args.output,
-        fps=args.fps,
-        show_watermark=not args.no_watermark,
-        title=args.title
-    )
-    
-    # 5. Merge Vocal-Removed Instrumental Background Music
-    if not args.no_music:
-        print(f"\n[5/7] Merging Vocal-Removed Instrumental Background Music ({args.music_dir})...")
-        merge_instrumental_bgm(
-            video_path=output,
-            music_dir=args.music_dir,
-            volume=args.music_volume
-        )
-    
-    # 6. Generate YouTube Short Thumbnail image
+    wood_path = "engine/assets/wood.jpg"
+    hand_path = "engine/assets/hand_raw.png" if not args.no_hand else None
+
+    # 4. Generate YouTube Short Thumbnail image first (used as cover teaser and uploaded thumbnail)
     thumbnail_path = None
     if not args.no_thumbnail:
-        print("\n[6/7] Generating YouTube Short thumbnail with natural Kolam colors...")
-        thumb_output = os.path.splitext(output)[0] + "_thumbnail.jpg"
+        print("\n[4/7] Generating YouTube Short thumbnail with natural Kolam colors...")
+        thumb_output = os.path.splitext(args.output)[0] + "_thumbnail.jpg"
         try:
             thumbnail_path = generate_kolam_thumbnail(
                 input_image_path=args.input,
@@ -144,6 +123,29 @@ def main():
             print(f"  -> Thumbnail saved: {thumbnail_path}")
         except Exception as e:
             print(f"  -> Warning: Failed to generate thumbnail: {e}")
+
+    # 5. Render video - embeds thumbnail cover in opening frames for YouTube Shorts
+    print("\n[5/7] Rendering headless video (YouTube Shorts ready: 1080x1920, 25fps)...")
+    output = render_kolam_video(
+        dots=dots,
+        path=path,
+        wood_path=wood_path,
+        hand_path=hand_path if not args.no_hand else "engine/assets/hand_raw.png",
+        output_path=args.output,
+        fps=args.fps,
+        show_watermark=not args.no_watermark,
+        title=args.title,
+        cover_image_path=thumbnail_path
+    )
+    
+    # 6. Merge Vocal-Removed Instrumental Background Music
+    if not args.no_music:
+        print(f"\n[6/7] Merging Vocal-Removed Instrumental Background Music ({args.music_dir})...")
+        merge_instrumental_bgm(
+            video_path=output,
+            music_dir=args.music_dir,
+            volume=args.music_volume
+        )
             
     print("\n=== DONE ===")
     print(f"Video: {output}")

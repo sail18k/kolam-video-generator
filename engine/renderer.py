@@ -277,7 +277,7 @@ def overlay_hand(background, hand_img, pen_tip_pos, angle_offset=0):
     
     return background
 
-def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, line_thickness=6, show_watermark=True, title="AK Kolam"):
+def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, line_thickness=6, show_watermark=True, title="AK Kolam", cover_image_path=None):
     """Headless renderer - exact replica of reference video"""
     width, height = 1080, 1920
     
@@ -336,6 +336,30 @@ def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, li
     
     # Drawing canvas
     canvas = base.copy()
+    
+    frame_count = 0
+
+    # Write cover teaser frames if provided (ensures YouTube Shorts displays thumbnail cover)
+    if cover_image_path and os.path.exists(cover_image_path):
+        cover = cv2.imread(cover_image_path)
+        if cover is not None:
+            cover = cv2.resize(cover, (width, height))
+            cover_frames = 15  # ~0.6s teaser hook
+            for c_idx in range(cover_frames):
+                if c_idx >= cover_frames - 3:
+                    # 3-frame quick cross-fade to blank drawing floor
+                    alpha = (cover_frames - 1 - c_idx) / 3.0
+                    blend = cv2.addWeighted(cover, alpha, canvas, 1.0 - alpha, 0)
+                    if use_ffmpeg:
+                        process.stdin.write(blend.tobytes())
+                    else:
+                        out.write(blend)
+                else:
+                    if use_ffmpeg:
+                        process.stdin.write(cover.tobytes())
+                    else:
+                        out.write(cover)
+                frame_count += 1
     
     # For smooth drawing, dynamically set frames based on path length
     total_points = len(path)
