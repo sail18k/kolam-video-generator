@@ -13,7 +13,7 @@ The **Headless Kolam Video Generator V2** is an automated, end-to-end multimedia
 
 The system supports two complementary workflows:
 1. **Automated Headless CLI Workflow:** Turn static sketch images into progressively drawn videos with zero manual human intervention.
-2. **Interactive Drawing Studio Workflow:** Web-based freehand drawing studio accessible locally and over Wi-Fi/LAN, allowing real-time tracing over semi-transparent reference sketches with touch/mouse/stylus.
+2. **Strict Blueprint-Only Interactive Tracing Studio Workflow:** Web-based tracing studio accessible locally and over Wi-Fi/LAN. Users upload a black-on-white Kolam sketch which acts as an authoritative tracing blueprint. The human determines *WHAT* to draw and the *ORDER/DIRECTION* to trace it; the blueprint geometry strictly dictates *WHERE* the strokes go. Pointerdown in white space is blocked, departures pause without drawing, gap jumps ($> 35\text{px}$) are rejected, and intermediate curve points are locked directly onto the extracted 1px centerline skeleton.
 
 Core generative subsystems:
 1. **Multimodal Visual Classification** (Local LLM via Ollama LLaVA-7B with deterministic OpenCV geometric/HSV fallbacks).
@@ -24,7 +24,7 @@ Core generative subsystems:
 6. **Acoustic Vocal-Removed BGM Processing** (Center-channel vocal attenuation with punchy low-frequency bass preservation, looped seamlessly and muxed via FFmpeg).
 7. **Dynamic Bilingual SEO & Metadata Engine** (Tamil + English click-worthy titles, descriptions, and motif-aware tags).
 8. **YouTube Data API v3 Automated Publishing** (Direct OAuth2 upload with custom thumbnail attachment and automated categorization).
-9. **LAN-Accessible Interactive Drawing Studio** (Lightweight Flask backend, responsive HTML5/Canvas frontend, structured vector stroke recording, and real-time generation polling).
+9. **Strict Blueprint Tracing Studio & Snap Engine** (Lightweight Flask backend, responsive HTML5/Canvas frontend, OpenCV morphological skeleton extraction, 20px spatial hash index, sub-millisecond centerline locking, multi-tier gap prevention, and real-time generation polling).
 
 ---
 
@@ -105,7 +105,7 @@ D:\kolam video generation v2\
 │   │   └── studio.html             # Responsive 9:16 drawing studio interface with floating controls
 │   └── static/                     # Frontend static assets
 │       ├── studio.css              # Dark-mode styling, responsive multi-breakpoint layout & touch protection
-│       └── studio.js               # Pointer event drawing, stroke recorder, undo/redo, floating buttons & API polling
+│       └── studio.js               # Strict blueprint snapper, stroke recorder, undo/redo, floating buttons & API polling
 │
 ├── inputs/                         # Input sketches and reference materials
 │   ├── uploads/                    # Reference images uploaded via Drawing Studio
@@ -114,12 +114,12 @@ D:\kolam video generation v2\
 │
 ├── tests/                          # Automated unit and integration test suite
 │   ├── test_manual_drawing.py      # Tests stroke clamping, pen-up signals & sketch creation
-│   ├── test_web_api.py             # Integration tests for Flask endpoints & uploads
+│   ├── test_web_api.py             # Integration tests for Flask endpoints, blueprint validation & uploads
 │   ├── test_reference_alignment.py # Tests skeleton thinning, line extraction & geometry matching
 │   ├── test_end_to_end_alignment_render.py # E2E alignment to GPU NVENC video rendering test
 │   ├── test_end_to_end_render.py   # Complete vector-to-video NVENC rendering test
 │   ├── test_live_snapping.py       # Geometry serialization & live residual refinement tests
-│   └── test_browser_snapping.js    # Node.js test suite for browser ReferenceSnapper engine
+│   └── test_browser_snapping.js    # Node.js test suite for browser ReferenceSnapper engine (13 tests)
 │
 └── outputs/                        # Generated output artifacts (*.mp4, *_thumbnail.jpg, *_metadata.txt)
 ```
@@ -154,59 +154,58 @@ flowchart TD
     I -->|--no-upload or Skipped| K["Finished: Ready in outputs/"]
 ```
 
-### 4.2 Interactive Drawing Studio Workflow (`web_app.py`)
+### 4.2 Strict Blueprint Tracing Studio Workflow (`web_app.py`)
 
-The interactive workflow records human drawing strokes in real-time over an optional semi-transparent reference sketch, applies live in-browser reference snapping onto preprocessed skeletons, provides non-destructive residual refinement on the backend, and renders the exact stroke sequence into the identical video composition:
+The strict blueprint tracing workflow enforces that all accepted strokes remain constrained to the extracted 1px centerline geometry of the uploaded blueprint image. Raw white-area drawing is strictly blocked, and moving across gaps pauses tracing rather than drawing connecting lines:
 
 ```mermaid
 flowchart TD
-    subgraph Browser ["Web Client (Phone / Tablet / PC Browser)"]
-        UI["Drawing Studio UI (1080x1920 Logical Canvas)"]
-        Ref["Uploaded Reference Sketch (Adjustable Opacity 0-100%)"]
-        Grid["In-Memory Spatial Grid Index (ReferenceSnapper, 25px cells)"]
-        Pointer["Pointer Movement (Mouse, Touch, Stylus)"]
-        LiveSnap["Real-Time Attraction & Canvas Draw (lineTo corrected point)"]
-        Float["Floating Canvas Quick Controls (Undo / Redo)"]
-        Payload["Structured Vector Stroke Payload (live_aligned=true, ref_image, ref_correction)"]
-
-        Ref --> UI
-        Ref -.->|Skeleton Geometry JSON| Grid
-        Pointer --> LiveSnap
-        Grid -.-> LiveSnap
-        LiveSnap --> UI
-        Float --> UI
-        UI --> Payload
+    subgraph Blueprint ["1. Blueprint Ingestion & Validation"]
+        Upload["User Uploads Sketch Image"] --> API_Up["POST /api/upload-reference"]
+        API_Up --> Valid{"Linework Detected?<br/>paths > 0 && points >= 8"}
+        Valid -->|No| Reject["HTTP 400 Bad Request<br/>Prompt User for Valid Sketch"]
+        Valid -->|Yes| Thin["OpenCV Golay Thinning<br/>1px Centerline + Tangents"]
+        Thin --> GeomJSON["Geometry JSON Payload<br/>(paths, tangents, scale, roi)"]
     end
 
-    subgraph Backend ["Server & Processing Pipeline (web_app.py)"]
-        API["Flask REST API: POST /api/generate"]
-        Queue["Background Async Job Queue (1 GPU Job at a Time)"]
-        Route{"live_aligned == true?"}
-        Residual["refine_live_aligned_strokes (Boundary clamping, loop closure, gentle smoothing)"]
-        FullCorr["correct_stroke_sequence (Full multi-cue skeleton & Viterbi deformation)"]
-        ManualEng["engine/manual_drawing.py (Validation & Path Synthesis)"]
-        SketchGen["Monochrome Sketch Synthesis (temp_sketch.png)"]
-        ThumbGen["engine/thumbnail_generator.py (Colorized Short Cover)"]
-        Render["engine/renderer.py (NVENC 1080x1920 @ 25 FPS + Hand Animation)"]
-        Audio["engine/audio_processor.py (Vocal Removal + BGM Muxing)"]
-        SEO["engine/seo_generator.py (Dynamic Tamil + English Metadata)"]
-        Complete["Output Artifacts (*.mp4, *_thumbnail.jpg, *_metadata.txt)"]
+    subgraph Client ["2. Strict Browser Snapping Engine (web/static/studio.js)"]
+        GeomJSON --> Grid["20px Spatial Hash Grid<br/>Dense 4-6px Point Sampling"]
+        P_Down["Pointer Down (x, y)"] --> CheckDown{"Distance to Centerline <= 26px?"}
+        CheckDown -->|No: White Space| Block["Blocked: accepted=false<br/>Toast: Tracing restricted to lines"]
+        CheckDown -->|Yes: On Line| Lock["Lock activePathId<br/>Snap exact centerline point"]
+        
+        P_Move["Pointer Move (x, y)"] --> CheckMove{"Step <= 35px && Offset <= 14px<br/>&& Dist to Line <= 26px?"}
+        CheckMove -->|No: Exited Line / Jump| Pause["Stroke Paused<br/>No Points Emitted"]
+        CheckMove -->|Yes: Valid Continuation| Emit["Extract Centerline Points<br/>Emit to activeStroke.points"]
+        Pause --> Resume{"Pointer Returns to<br/>Same Path within <= 35px?"}
+        Resume -->|Yes| Emit
+        Resume -->|No: Different Line| MustLift["User Must Lift Pen<br/>Start New Stroke on New Line"]
+        
+        P_Up["Pointer Up"] --> LoopCheck{"Endpoint within 20px<br/>of Start Point?"}
+        LoopCheck -->|Yes| CloseLoop["Snap Closed Loop"]
+        LoopCheck -->|No| EndStroke["Finalize Stroke Delimiter"]
+    end
 
-        Payload --> API
-        API --> Queue
-        Queue --> Route
-        Route -->|Yes: Client already snapped live| Residual
-        Route -->|No: Legacy / CLI freehand tracing| FullCorr
-        Residual --> ManualEng
-        FullCorr --> ManualEng
-        ManualEng -->|Ordered Path with None Delimiters| Render
-        ManualEng -->|Black Strokes on White| SketchGen
-        SketchGen --> ThumbGen
-        ThumbGen -->|Cover Teaser (15 frames)| Render
-        Render --> Audio
-        Audio --> SEO
-        SEO --> Complete
-        Complete -->|Status Polling & Video Stream| UI
+    subgraph Backend ["3. Multi-Layer Safeguard & Rendering Pipeline"]
+        EndStroke --> Payload["POST /api/generate<br/>(live_aligned=true, strokes, ref)"]
+        Payload --> Queue["Background Async Job Queue<br/>(1 GPU NVENC Job at a Time)"]
+        Queue --> Refine["engine/reference_alignment.py<br/>refine_live_aligned_strokes"]
+        Refine --> SubSplit{"Internal Gap > 35px?"}
+        SubSplit -->|Yes| SplitStrokes["Split into Sub-Strokes<br/>Prevent fabricated bridges"]
+        SubSplit -->|No| Clamp["Coordinate Clamping [0, 1079]x[0, 1919]<br/>Moving-Average Polish"]
+        Clamp --> Manual["engine/manual_drawing.py<br/>strokes_to_renderer_path"]
+        Manual --> GapDelim{"Distance > 40px?"}
+        GapDelim -->|Yes| InjectNone["Inject None Pen-Up Delimiter"]
+        GapDelim -->|No| Interp["Dense 4px Step Interpolation"]
+        
+        InjectNone --> Render["engine/renderer.py (NVENC 1080x1920 @ 25 FPS)"]
+        Interp --> Render
+        Manual --> Sketch["render_strokes_to_sketch_image<br/>(Skip lines across > 40px gaps)"]
+        Sketch --> Thumb["engine/thumbnail_generator.py (3D Powder Cover)"]
+        Thumb -->|15 Frame Teaser Hook| Render
+        Render --> Audio["engine/audio_processor.py (Vocal Removal + BGM)"]
+        Audio --> SEO["engine/seo_generator.py (Dynamic Metadata)"]
+        SEO --> Done["Outputs Ready (*.mp4, *_thumbnail.jpg, *_metadata.txt)"]
     end
 ```
 
@@ -538,6 +537,53 @@ The payload submitted by the Drawing Studio to `/api/generate` matches this sche
 - `live_aligned`: Optional boolean (`true` when client-side `ReferenceSnapper` already aligned points in real time; instructs backend to run `refine_live_aligned_strokes` residual refinement instead of full Viterbi deformation).
 - `strokes[].points`: Ordered array of `{x, y, t}` where `x` and `y` are integers ($0 \le x < 1080$, $0 \le y < 1920$) and `t` is elapsed time in milliseconds.
 
+### 6.4 Reference Blueprint Geometry Schema (JSON)
+Returned by `POST /api/upload-reference` under the `geometry` key:
+```json
+{
+  "success": true,
+  "filename": "inputs/uploads/abc123_blueprint.png",
+  "image_url": "/api/uploads/abc123_blueprint.png",
+  "geometry": {
+    "scale": 1.45,
+    "roi": [140, 260, 800, 1400],
+    "width": 1080,
+    "height": 1920,
+    "paths": [
+      {
+        "id": 0,
+        "points": [[540.0, 480.0], [544.5, 485.2], [550.1, 492.0]],
+        "tangents": [[0.7071, 0.7071], [0.6500, 0.7599], [0.6000, 0.8000]]
+      }
+    ]
+  }
+}
+```
+- `scale`: Aspect-preserving scaling factor mapping raw image pixels to the logical $1080 \times 1920$ canvas.
+- `roi`: `[x_offset, y_offset, bounding_width, bounding_height]` of the displayed blueprint.
+- `paths[].id`: Unique path index for each continuous centerline segment.
+- `paths[].points`: Array of `[x, y]` float coordinates along the extracted 1px skeleton.
+- `paths[].tangents`: Normalized 2D unit tangent vectors `[t_x, t_y]` at each point for directional scoring.
+
+### 6.5 Background Job Status Schema (JSON)
+Polled at `GET /api/jobs/<job_id>`:
+```json
+{
+  "job_id": "job_1729094000_123456",
+  "status": "completed",
+  "progress": 100,
+  "stage": "Video rendering complete! Ready to view.",
+  "video_url": "/api/jobs/job_1729094000_123456/video",
+  "thumbnail_url": "/api/jobs/job_1729094000_123456/thumbnail",
+  "metadata_url": "/api/jobs/job_1729094000_123456/metadata",
+  "created_at": 1729094000.12,
+  "error": null
+}
+```
+- `status`: `"queued"` -> `"running"` -> `"completed"` (or `"failed"`).
+- `progress`: Integer percentage `0` to `100`.
+- `stage`: User-facing progress description (e.g. "Tracing paths...", "Rendering frame 60/125 (48.0%)...", "Muxing audio...").
+
 
 ---
 
@@ -581,6 +627,8 @@ When interacting with or extending this codebase, all AI agents **must strictly 
 | Rendering is unusually slow (< 5 FPS) | FFmpeg failed to initialize NVENC and fell back to CPU `cv2.VideoWriter` | Run `nvidia-smi` to ensure GPU is accessible; check that FFmpeg in PATH supports `h264_nvenc`. |
 | Audio track is trimmed or video ends abruptly | `-shortest` flag passed to FFmpeg | Ensure `-stream_loop -1` is used for audio and `-t <duration>` is set strictly to the video length. |
 | Phone / tablet cannot reach Studio URL on LAN | Windows Defender Firewall blocking port 8000 on private profile | Run `New-NetFirewallRule -DisplayName "Kolam Studio Port 8000" -Direction Inbound -LocalPort 8000 -Protocol TCP -Action Allow -Profile Private`. |
+| Blueprint upload fails with HTTP 400 | Uploaded image has no detectable black linework or is uniform white/black | Ensure uploaded file is a clear sketch with dark strokes on a light background. |
+| Pointer draws nothing on canvas | Pointer clicked in white space outside the 26px blueprint centerline radius | Strictly intended: user must click directly on a blueprint line to begin tracing. |
 
 ---
 
@@ -604,10 +652,10 @@ python -m unittest tests/test_end_to_end_alignment_render.py
 # 5. Run Live Reference Snapping Backend Tests
 python -m unittest tests/test_live_snapping.py
 
-# 6. Run Browser Real-Time Reference Snapping Tests (Node.js Test Suite)
+# 6. Run Browser Real-Time Reference Snapping Tests (Node.js Test Suite - 13/13 passing)
 node tests/test_browser_snapping.js
 
-# 7. Run the Entire Automated Test Suite (30 Unit & Regression Tests)
+# 7. Run the Entire Automated Test Suite (30 Unit & Regression Tests - 30/30 passing)
 python -m unittest discover tests
 
 # 8. Run a Fast End-to-End Test Video Generation (CLI Workflow)
@@ -622,4 +670,49 @@ cmd /c start.bat
 cmd /c stop.bat
 # Or stop a custom port instance: cmd /c "stop.bat 8080"
 ```
+
+### 9.1 Test Suite Breakdown
+
+| Suite / Test File | Runner | Test Count | Key Functionalities Verified |
+| :--- | :--- | :---: | :--- |
+| `tests/test_browser_snapping.js` | Node.js | **13** | Strict blueprint snapping, white-area blocking on pointerdown, stroke departure pause, gap jump prevention ($> 35\text{px}$), resume continuity, parallel line locking ($> 14\text{px}$ rejection), intersection traversal, rapid move intermediate curve sampling, loop closure ($\le 20\text{px}$), blueprint invalidation on clear. |
+| `tests/test_web_api.py` | Python unittest | **8** | Index route, system info, blueprint upload with geometry serialization, empty blueprint 400 rejection, invalid extension rejection, job submission & polling, reference-guided job submission, empty strokes error. |
+| `tests/test_live_snapping.py` | Python unittest | **7** | Reference geometry serialization with unit tangents, conservative live residual refinement (`refine_live_aligned_strokes`), sub-stroke splitting on gaps $> 35\text{px}$, payload normalization, end-to-end alignment pipeline. |
+| `tests/test_manual_drawing.py` | Python unittest | **5** | Stroke validation, coordinate clamping ($[0, 1079] \times [0, 1919]$), pen-up delimiter (`None`) injection on distance $> 40\text{px}$, sketch image synthesis with gap skipping. |
+| `tests/test_reference_alignment.py` | Python unittest | **5** | Morphological Golay skeletonization, non-branching polyline decomposition, orientation field calculation, Viterbi map-matching. |
+| `tests/test_end_to_end_render.py` | Python unittest | **2** | Hardware NVENC 1080x1920 video frame compositing, wood texture, hand sprite animation, subscriber badges, thumbnail teaser crossfade. |
+| `tests/test_end_to_end_alignment_render.py` | Python unittest | **1** | Full end-to-end integration: reference upload $\rightarrow$ stroke refinement $\rightarrow$ 125-frame GPU NVENC MP4 render with audio muxing. |
+| `tests/test_classifier.py` | Python unittest | **2** | Multimodal LLaVA visual classification & deterministic OpenCV HSV/contour heuristic fallbacks. |
+
+---
+
+## 10. System Evolution & Architectural Changelog
+
+### Version 2.2 — Strict Blueprint-Only Tracing Engine (October 2026)
+- **Strict Centerline Constraint:** Converted the freehand drawing studio into an authoritative blueprint tracing studio. The blueprint geometry strictly determines where strokes go; user pointer movement dictates tracing order, timing, and direction.
+- **Strict Pointerdown Blocking:** Clicks or taps in white space ($> 26\text{px}$ from any extracted centerline) are rejected (`accepted: false, blocked: true`), showing an unobtrusive toast notification: *"⚠️ Tracing restricted to blueprint lines. Click directly on a black line to start tracing."*
+- **Departure & Pause Semantics:** If the pointer leaves the valid line geometry, stroke recording pauses at the last valid coordinate without recording raw white-area points.
+- **Zero Gap Bridging:** The engine strictly refuses to fabricate straight connecting lines across white gaps. Pointer movements exceeding $35\text{px}$ are rejected.
+- **Resume Continuity:** Tracing resumes smoothly if the pointer returns to a valid continuation of the active path ($\le 35\text{px}$). Disconnected lines must be started as new strokes.
+- **Multi-Layer Backend Safeguards:**
+  - `refine_live_aligned_strokes` automatically splits strokes into sub-strokes if internal gaps exceed $35\text{px}$.
+  - `strokes_to_renderer_path` injects a `None` delimiter if distance exceeds $40\text{px}$.
+  - `render_strokes_to_sketch_image` skips line rendering across jumps $> 40\text{px}$.
+  - `POST /api/upload-reference` validates blueprint linework and rejects blank/unrecognizable images with HTTP 400.
+- **Verification:** 13/13 Node.js browser tests passing + 30/30 Python tests passing.
+
+### Version 2.1 — Real-Time Reference Snapping Engine
+- **In-Browser Alignment:** Introduced client-side `ReferenceSnapper` using a 2D spatial hash grid with sub-millisecond candidate lookup.
+- **Immediate Visual Feedback:** Active strokes render directly along snapped geometry during pointer movement rather than waiting for post-processing.
+- **Backend Residual Refinement:** Created `refine_live_aligned_strokes` in `engine/reference_alignment.py` for lightweight polishing when `live_aligned: true` is submitted.
+
+### Version 2.0 — Interactive Drawing Studio & Responsive Architecture
+- **Interactive Web Studio:** Added Flask REST API, Jinja2 template, and vanilla JavaScript canvas supporting mouse, touch, and stylus.
+- **Responsive Multi-Breakpoint Layout:** Desktop dock, landscape tablet dock, and portrait bottom scroll dock with golden scrollbars.
+- **Floating Canvas Controls:** Canvas-anchored glassmorphism Undo/Redo buttons (`↩️`, `↪️`) for effortless mobile thumb interaction.
+- **Production Control Scripts:** Created `start.bat` (LAN IP discovery, port conflict check, background/foreground modes) and `stop.bat` (process tree taskkill and port release).
+
+### Version 1.0 — Automated Headless CLI Pipeline
+- **Core Pipeline:** Implemented automated image-to-video workflow with OpenCV contour tracing, Bezier loop weaving, GPU NVENC rendering, 3D powder thumbnail synthesis, center-channel vocal removal, and YouTube Data API v3 integration.
+
 
