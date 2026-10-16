@@ -277,7 +277,7 @@ def overlay_hand(background, hand_img, pen_tip_pos, angle_offset=0):
     
     return background
 
-def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, line_thickness=6, show_watermark=True, title="AK Kolam", cover_image_path=None):
+def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, line_thickness=6, show_watermark=True, title="AK Kolam", cover_image_path=None, point_colors=None, point_widths=None, progress_callback=None):
     """Headless renderer - exact replica of reference video"""
     width, height = 1080, 1920
     
@@ -381,7 +381,9 @@ def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, li
                 p1 = path[i-1]
                 p2 = path[i]
                 if p1 is not None and p2 is not None:
-                    cv2.line(canvas, p1, p2, (255,255,255), line_thickness, lineType=cv2.LINE_AA)
+                    color = point_colors[i] if point_colors and i < len(point_colors) and point_colors[i] is not None else (255, 255, 255)
+                    thickness = point_widths[i] if point_widths and i < len(point_widths) and point_widths[i] is not None else line_thickness
+                    cv2.line(canvas, p1, p2, color, thickness, lineType=cv2.LINE_AA)
                 
         # Write frame if we advanced the point
         if current_idx > 0:
@@ -423,6 +425,11 @@ def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, li
             import sys
             sys.stdout.write(f"\r  -> Rendering progress: {progress:.1f}% ({frame_idx+1}/{target_frames} frames)")
             sys.stdout.flush()
+            if progress_callback:
+                try:
+                    progress_callback(progress, frame_idx + 1, target_frames)
+                except Exception:
+                    pass
             
         last_idx = current_idx
         if current_idx >= total_points:

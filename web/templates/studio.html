@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Kolam Interactive Drawing Studio</title>
+    <link rel="stylesheet" href="/static/studio.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Top Navigation Bar -->
+        <header class="app-header">
+            <div class="header-left">
+                <div class="logo-mark">
+                    <span class="logo-icon">🌸</span>
+                    <div class="logo-text">
+                        <h1>Kolam Studio</h1>
+                        <span class="subtitle">Headless Video Generator V2</span>
+                    </div>
+                </div>
+                <div class="lan-badge" id="lanBadge" title="LAN / Wi-Fi Access Status">
+                    <span class="status-dot"></span>
+                    <span class="lan-ip" id="lanIpText">Discovering LAN...</span>
+                </div>
+            </div>
+
+            <div class="header-center">
+                <div class="input-group title-input-group">
+                    <label for="videoTitle">Channel / Title:</label>
+                    <input type="text" id="videoTitle" value="AK Kolam" maxlength="30" placeholder="e.g. AK Kolam">
+                </div>
+                <div class="input-group grid-input-group">
+                    <label for="dotGridSelect">Dot Grid:</label>
+                    <select id="dotGridSelect">
+                        <option value="none" selected>Freehand / None</option>
+                        <option value="8x2">8x2 Pulli (40 Dots)</option>
+                        <option value="6x2">6x2 Pulli (24 Dots)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="header-right">
+                <button id="btnGenerate" class="btn btn-primary btn-generate" title="Render Progressive Video">
+                    <span class="btn-icon">🎬</span>
+                    <span class="btn-text">Generate Video</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Workspace -->
+        <main class="workspace">
+            <!-- Left Tool Sidebar (Floating / Docked) -->
+            <aside class="toolbar-panel">
+                <!-- Tool Selector -->
+                <div class="tool-section">
+                    <div class="section-title">Tools</div>
+                    <div class="button-toggle-group">
+                        <button id="toolBrush" class="tool-btn active" title="Brush Tool (B)">
+                            <span class="icon">✏️</span>
+                            <span class="label">Brush</span>
+                        </button>
+                        <button id="toolEraser" class="tool-btn" title="Stroke Eraser (E)">
+                            <span class="icon">🧹</span>
+                            <span class="label">Eraser</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Brush Size -->
+                <div class="tool-section">
+                    <div class="section-title">
+                        <span>Stroke Size</span>
+                        <span id="brushSizeVal" class="val-badge">6 px</span>
+                    </div>
+                    <div class="size-presets">
+                        <button class="preset-btn" data-size="3">Fine</button>
+                        <button class="preset-btn active" data-size="6">Medium</button>
+                        <button class="preset-btn" data-size="10">Thick</button>
+                        <button class="preset-btn" data-size="16">Bold</button>
+                    </div>
+                    <input type="range" id="brushSizeSlider" min="2" max="30" value="6" class="slider">
+                </div>
+
+                <!-- Palette Colors -->
+                <div class="tool-section">
+                    <div class="section-title">Brush Color</div>
+                    <div class="color-palette" id="colorPalette">
+                        <button class="color-swatch active" data-color="#FFFFFF" style="--c: #FFFFFF;" title="Flour White"></button>
+                        <button class="color-swatch" data-color="#FFD700" style="--c: #FFD700;" title="Turmeric Gold"></button>
+                        <button class="color-swatch" data-color="#E41C2A" style="--c: #E41C2A;" title="Kumkum Red"></button>
+                        <button class="color-swatch" data-color="#F837B9" style="--c: #F837B9;" title="Lotus Pink"></button>
+                        <button class="color-swatch" data-color="#00E5FF" style="--c: #00E5FF;" title="Vibrant Cyan"></button>
+                        <button class="color-swatch" data-color="#43A047" style="--c: #43A047;" title="Parrot Green"></button>
+                    </div>
+                </div>
+
+                <!-- Reference Image Controls -->
+                <div class="tool-section">
+                    <div class="section-title">Reference Image</div>
+                    <input type="file" id="refImageInput" accept="image/png, image/jpeg, image/jpg, image/webp" style="display:none;">
+                    <div class="ref-actions">
+                        <button id="btnUploadRef" class="btn btn-secondary btn-full" title="Upload sketch/guide image">
+                            <span class="icon">📁</span>
+                            <span id="uploadLabel">Upload Image</span>
+                        </button>
+                        <button id="btnRemoveRef" class="btn btn-icon-only" title="Remove reference image" style="display:none;">
+                            ❌
+                        </button>
+                    </div>
+
+                    <div class="opacity-control" id="opacityControl">
+                        <div class="slider-header">
+                            <span>Image Opacity</span>
+                            <span id="opacityVal" class="val-badge">40%</span>
+                        </div>
+                        <input type="range" id="refOpacitySlider" min="0" max="100" value="40" class="slider">
+                    </div>
+                </div>
+
+                <!-- History Actions -->
+                <div class="tool-section history-section">
+                    <div class="section-title">History</div>
+                    <div class="history-buttons">
+                        <button id="btnUndo" class="btn btn-secondary" title="Undo (Ctrl+Z)" disabled>
+                            <span>↩️</span> Undo
+                        </button>
+                        <button id="btnRedo" class="btn btn-secondary" title="Redo (Ctrl+Y)" disabled>
+                            <span>↪️</span> Redo
+                        </button>
+                    </div>
+                    <button id="btnClear" class="btn btn-danger btn-full" title="Clear all strokes">
+                        <span>🗑️</span> Clear Canvas
+                    </button>
+                </div>
+            </aside>
+
+            <!-- Center Drawing Canvas Viewport -->
+            <section class="canvas-viewport" id="canvasViewport">
+                <div class="canvas-wrapper" id="canvasWrapper">
+                    <!-- Layer 1: Reference Guide Image -->
+                    <div class="reference-layer" id="referenceLayer">
+                        <img id="refImage" alt="Reference Guide" style="display:none;">
+                        <div class="ref-placeholder" id="refPlaceholder">
+                            <span class="placeholder-icon">🖼️</span>
+                            <p>Upload a reference image to trace over</p>
+                            <span class="placeholder-hint">(Optional — or start freehand drawing right away)</span>
+                        </div>
+                    </div>
+
+                    <!-- Layer 2: Dot Grid Layer -->
+                    <canvas id="dotGridCanvas" class="dot-grid-canvas" width="1080" height="1920"></canvas>
+
+                    <!-- Layer 3: Interactive Drawing Canvas -->
+                    <canvas id="drawingCanvas" class="drawing-canvas" width="1080" height="1920"></canvas>
+
+                    <!-- Top-Corner Aspect Ratio Marker -->
+                    <div class="aspect-badge">9:16 (1080×1920)</div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Generation Progress / Video Player Modal -->
+        <div class="modal-backdrop" id="jobModal" style="display:none;">
+            <div class="modal-dialog">
+                <div class="modal-header">
+                    <h2 id="modalTitle">Generating Kolam Video</h2>
+                    <button class="modal-close" id="modalCloseBtn" style="display:none;">&times;</button>
+                </div>
+                
+                <div class="modal-body">
+                    <!-- Progress View -->
+                    <div class="progress-view" id="modalProgressView">
+                        <div class="progress-spinner-container">
+                            <div class="circular-progress">
+                                <svg viewBox="0 0 100 100">
+                                    <circle class="bg-circle" cx="50" cy="50" r="42"></circle>
+                                    <circle class="fg-circle" id="progressCircle" cx="50" cy="50" r="42"></circle>
+                                </svg>
+                                <span class="progress-percentage" id="progressPercent">0%</span>
+                            </div>
+                        </div>
+                        <div class="progress-stage-title" id="progressStage">Preparing drawing data...</div>
+                        <p class="progress-subtext" id="progressSubtext">Your actual strokes are being rendered frame-by-frame with NVENC GPU acceleration.</p>
+                    </div>
+
+                    <!-- Complete View (Video & Thumbnail Preview) -->
+                    <div class="complete-view" id="modalCompleteView" style="display:none;">
+                        <div class="media-preview-container">
+                            <div class="video-preview-wrapper">
+                                <video id="resultVideo" controls autoplay loop playsinline></video>
+                            </div>
+                            <div class="thumb-preview-wrapper" id="thumbWrapper">
+                                <div class="thumb-label">YouTube Shorts Cover</div>
+                                <img id="resultThumbnail" alt="Generated Thumbnail">
+                            </div>
+                        </div>
+
+                        <!-- SEO Metadata Preview -->
+                        <div class="seo-preview-card" id="seoCard">
+                            <div class="seo-field">
+                                <label>Suggested YouTube Title:</label>
+                                <div class="seo-text" id="seoTitleText">...</div>
+                            </div>
+                            <div class="seo-field">
+                                <label>Search Tags:</label>
+                                <div class="seo-tags" id="seoTagsText">...</div>
+                            </div>
+                        </div>
+
+                        <!-- Action Buttons -->
+                        <div class="complete-actions">
+                            <a id="btnDownloadVideo" class="btn btn-primary" download>
+                                <span>📥</span> Download MP4 Video
+                            </a>
+                            <a id="btnDownloadThumb" class="btn btn-secondary" download>
+                                <span>🖼️</span> Download Thumbnail
+                            </a>
+                            <button id="btnContinueDrawing" class="btn btn-outline">
+                                <span>✏️</span> Keep Drawing
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Error View -->
+                    <div class="error-view" id="modalErrorView" style="display:none;">
+                        <div class="error-icon">⚠️</div>
+                        <h3>Generation Failed</h3>
+                        <p id="errorMessage" class="error-details">An error occurred.</p>
+                        <button id="btnDismissError" class="btn btn-primary">Back to Canvas</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Confirm Clear Modal -->
+        <div class="modal-backdrop" id="clearConfirmModal" style="display:none;">
+            <div class="modal-dialog modal-sm">
+                <div class="modal-header">
+                    <h2>Clear Canvas?</h2>
+                </div>
+                <div class="modal-body">
+                    <p>Are you sure you want to clear your drawing? This will remove all strokes. The uploaded reference image will be preserved.</p>
+                </div>
+                <div class="modal-footer">
+                    <button id="btnCancelClear" class="btn btn-secondary">Cancel</button>
+                    <button id="btnConfirmClear" class="btn btn-danger">Yes, Clear All</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/studio.js"></script>
+</body>
+</html>
