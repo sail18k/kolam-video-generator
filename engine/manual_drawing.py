@@ -113,7 +113,10 @@ def validate_and_normalize_drawing_payload(payload: Dict[str, Any]) -> Dict[str,
         "canvas": {"width": canvas_w, "height": canvas_h},
         "title": str(payload.get("title", "AK Kolam")),
         "dot_grid": str(payload.get("dot_grid", "none")),
-        "strokes": normalized_strokes
+        "strokes": normalized_strokes,
+        "reference_image": payload.get("reference_image"),
+        "correction_enabled": bool(payload.get("correction_enabled", True)),
+        "live_aligned": bool(payload.get("live_aligned", False))
     }
 
 
@@ -154,8 +157,15 @@ def strokes_to_renderer_path(
                 dy = curr_pt[1] - prev_pt[1]
                 dist = math.hypot(dx, dy)
                 
-                # Interpolate intermediate steps for smooth tracing if gap > step_size
-                if dist > step_size:
+                # Strict Blueprint Tracing: never interpolate across large gaps or blocked intervals!
+                if dist > 40.0:
+                    path.append(None)
+                    point_colors.append(None)
+                    point_widths.append(None)
+                    path.append(curr_pt)
+                    point_colors.append(color)
+                    point_widths.append(width)
+                elif dist > step_size:
                     num_steps = max(1, int(dist / step_size))
                     for step in range(1, num_steps + 1):
                         frac = step / float(num_steps)
@@ -194,7 +204,8 @@ def render_strokes_to_sketch_image(
         for i in range(1, len(pts)):
             p1 = (pts[i-1]["x"], pts[i-1]["y"])
             p2 = (pts[i]["x"], pts[i]["y"])
-            cv2.line(sketch, p1, p2, (0, 0, 0), thickness, lineType=cv2.LINE_AA)
+            if math.hypot(p2[0] - p1[0], p2[1] - p1[1]) <= 40.0:
+                cv2.line(sketch, p1, p2, (0, 0, 0), thickness, lineType=cv2.LINE_AA)
             
         # Draw rounded caps at points for crisp look
         for pt in pts:

@@ -40,6 +40,13 @@ from engine.manual_drawing import (
     strokes_to_renderer_path,
     render_strokes_to_sketch_image,
 )
+from engine.reference_alignment import (
+    preprocess_reference_image,
+    correct_stroke_sequence,
+    serialize_reference_geometry,
+    refine_live_aligned_strokes,
+    save_alignment_diagnostics,
+)
 from engine.dot_generator import generate_custom_dots
 from engine.renderer import render_kolam_video
 from engine.thumbnail_generator import generate_kolam_thumbnail
@@ -112,12 +119,45 @@ def background_job_worker():
             if grid_type and grid_type != "none":
                 dots = generate_custom_dots(grid_type, width=1080, height=1920)
                 
-            # 2. Path Synthesis
+            # 2. Reference Alignment & Path Synthesis
+            ref_filename = normalized.get("reference_image") or payload.get("reference_image")
+            correction_enabled = normalized.get("correction_enabled", True)
+            live_aligned = normalized.get("live_aligned", False) or payload.get("live_aligned", False)
+            aligned_strokes = normalized["strokes"]
+            ref_geom = None
+
+            if ref_filename and correction_enabled:
+                safe_name = secure_filename(os.path.basename(str(ref_filename)))
+                ref_path = UPLOADS_DIR / safe_name
+                if ref_path.exists() and ref_path.is_file():
+                    with jobs_lock:
+                        job["stage"] = "Refining live-aligned strokes" if live_aligned else "Aligning strokes to reference"
+                        job["progress"] = 10
+                    try:
+                        ref_geom = preprocess_reference_image(str(ref_path))
+                        if live_aligned:
+                            # Frontend already snapped in real time; perform conservative residual refinement
+                            corrected, diag = refine_live_aligned_strokes(normalized["strokes"], ref_geom)
+                            aligned_strokes = corrected
+                            print(f"[JOB {job_id}] Live-aligned stroke refinement: {diag.get('refined_count', 0)}/{len(aligned_strokes)} strokes refined.")
+                        else:
+                            # Full backend Viterbi alignment for legacy or CLI payloads
+                            corrected, diag = correct_stroke_sequence(normalized["strokes"], ref_geom)
+                            aligned_strokes = corrected
+                            print(f"[JOB {job_id}] Reference alignment completed: {diag.get('corrected_count', 0)}/{diag.get('total_strokes', 0)} strokes aligned.")
+
+                        # Save debug diagnostics if enabled
+                        if os.environ.get("KOLAM_DEBUG", "0") == "1" or payload.get("debug"):
+                            debug_dir = OUTPUTS_DIR / f"debug_{job_id[:8]}"
+                            save_alignment_diagnostics(debug_dir, ref_geom, normalized["strokes"], corrected, diag)
+                    except Exception as e:
+                        print(f"[JOB {job_id}] Reference alignment warning: {e}. Falling back to raw strokes.")
+
             with jobs_lock:
                 job["stage"] = "Synthesizing drawing path"
-                job["progress"] = 15
+                job["progress"] = 18
                 
-            path, point_colors, point_widths = strokes_to_renderer_path(normalized["strokes"])
+            path, point_colors, point_widths = strokes_to_renderer_path(aligned_strokes)
             
             # 3. Output filenames
             timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -130,12 +170,12 @@ def background_job_worker():
             thumb_path = str(OUTPUTS_DIR / thumb_filename)
             temp_sketch_path = str(OUTPUTS_DIR / temp_sketch_name)
             
-            # 4. Thumbnail & Opening Teaser Cover
+            # 4. Thumbnail & Opening Teaser Cover (Derived from Corrected Strokes)
             with jobs_lock:
                 job["stage"] = "Generating thumbnail"
                 job["progress"] = 25
                 
-            render_strokes_to_sketch_image(normalized["strokes"], temp_sketch_path)
+            render_strokes_to_sketch_image(aligned_strokes, temp_sketch_path)
             
             wood_path = str(ROOT_DIR / "engine" / "assets" / "wood.jpg")
             hand_path = str(ROOT_DIR / "engine" / "assets" / "hand_raw.png")
@@ -296,11 +336,31 @@ def upload_reference():
     save_path = UPLOADS_DIR / unique_name
     
     file.save(str(save_path))
-    
+
+    geometry_data = None
+    try:
+        ref_geom = preprocess_reference_image(str(save_path))
+        if len(ref_geom.paths) == 0 or len(ref_geom.skel_points) < 8:
+            if save_path.exists():
+                save_path.unlink()
+            return jsonify({
+                "success": False,
+                "error": "No valid black linework or Kolam patterns detected on the blueprint. Please upload a clear sketch with dark lines."
+            }), 400
+        geometry_data = serialize_reference_geometry(ref_geom)
+    except Exception as e:
+        if save_path.exists():
+            save_path.unlink()
+        return jsonify({
+            "success": False,
+            "error": f"Failed to extract blueprint geometry: {str(e)}"
+        }), 400
+
     return jsonify({
         "success": True,
         "filename": unique_name,
-        "image_url": f"/api/uploads/{unique_name}"
+        "image_url": f"/api/uploads/{unique_name}",
+        "geometry": geometry_data
     })
 
 

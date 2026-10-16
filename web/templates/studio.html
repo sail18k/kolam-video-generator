@@ -118,6 +118,13 @@
                         </div>
                         <input type="range" id="refOpacitySlider" min="0" max="100" value="40" class="slider">
                     </div>
+
+                    <div class="correction-control" id="correctionControl">
+                        <label class="toggle-checkbox" title="Strict Blueprint Tracing: Constrain strokes strictly to blueprint lines">
+                            <input type="checkbox" id="refCorrectionToggle" checked>
+                            <span class="toggle-text">Blueprint Snapping</span>
+                        </label>
+                    </div>
                 </div>
 
                 <!-- History Actions -->
@@ -145,8 +152,8 @@
                         <img id="refImage" alt="Reference Guide" style="display:none;">
                         <div class="ref-placeholder" id="refPlaceholder">
                             <span class="placeholder-icon">🖼️</span>
-                            <p>Upload a reference image to trace over</p>
-                            <span class="placeholder-hint">(Optional — or start freehand drawing right away)</span>
+                            <p>Upload a reference blueprint to trace</p>
+                            <span class="placeholder-hint">Strict Blueprint Tracing: Upload a black-line sketch to begin</span>
                         </div>
                     </div>
 
@@ -158,6 +165,12 @@
 
                     <!-- Top-Corner Aspect Ratio Marker -->
                     <div class="aspect-badge">9:16 (1080×1920)</div>
+
+                    <!-- Floating Quick Controls for Mobile/Touch -->
+                    <div class="floating-controls" id="floatingControls">
+                        <button id="btnFloatUndo" class="btn-float" title="Undo (Ctrl+Z)" disabled>↩️</button>
+                        <button id="btnFloatRedo" class="btn-float" title="Redo (Ctrl+Y)" disabled>↪️</button>
+                    </div>
                 </div>
             </section>
         </main>

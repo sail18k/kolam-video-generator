@@ -28,8 +28,11 @@
     const uploadLabel = document.getElementById('uploadLabel');
     const refOpacitySlider = document.getElementById('refOpacitySlider');
     const opacityVal = document.getElementById('opacityVal');
+    const refCorrectionToggle = document.getElementById('refCorrectionToggle');
     const btnUndo = document.getElementById('btnUndo');
     const btnRedo = document.getElementById('btnRedo');
+    const btnFloatUndo = document.getElementById('btnFloatUndo');
+    const btnFloatRedo = document.getElementById('btnFloatRedo');
     const btnClear = document.getElementById('btnClear');
     const dotGridSelect = document.getElementById('dotGridSelect');
     const videoTitle = document.getElementById('videoTitle');
@@ -70,6 +73,7 @@
     let isDrawing = false;
     let sessionStartTime = performance.now();
     let pollInterval = null;
+    let currentReferenceFilename = null;
 
     // --- LAN Discovery Info ---
     async function fetchSystemInfo() {
@@ -131,21 +135,536 @@
         targetCtx.restore();
     }
 
-    // --- Pointer Events for Freehand Drawing ---
+    // =========================================================================
+    // Strict Blueprint Tracing & Alignment Engine (In-Browser)
+    // Every accepted stroke is constrained to the blueprint centerline geometry.
+    // Movement in white areas or across gaps is strictly blocked.
+    // =========================================================================
+    const ReferenceSnapper = {
+        geometry: null,         // { paths: [...], roi: [padX, padY, w, h], scale: 1.0 }
+        pathsMap: new Map(),    // pathId -> { id, points, tangents, isClosed, length }
+        spatialGrid: new Map(), // key -> Array of { x, y, tx, ty, pathId, ptIdx, isClosed }
+        cellSize: 20,           // Grid cell size in logical canvas pixels
+        snapRadius: 26,         // Strict maximum search radius from centerline (26px)
+        maxStepDistance: 35,    // Maximum continuous step along path between events (35px)
+        isEnabled: true,        // Controlled by refCorrectionToggle
+        
+        // Active stroke tracking state
+        activePathId: null,
+        activePtIdx: null,
+        lastSnappedPoint: null,
+        lastRawPoint: null,
+        isPaused: false,
+        
+        hasGeometry() {
+            return Boolean(this.geometry && this.geometry.paths && this.geometry.paths.length > 0);
+        },
+
+        setEnabled(enabled) {
+            this.isEnabled = Boolean(enabled);
+        },
+
+        clear() {
+            this.geometry = null;
+            this.pathsMap.clear();
+            this.spatialGrid.clear();
+            this.resetActiveStroke();
+        },
+
+        resetActiveStroke() {
+            this.activePathId = null;
+            this.activePtIdx = null;
+            this.lastSnappedPoint = null;
+            this.lastRawPoint = null;
+            this.isPaused = false;
+        },
+
+        _cellKey(cx, cy) {
+            return `${cx},${cy}`;
+        },
+
+        _queryCandidates(coord, radius) {
+            const cellSize = this.cellSize;
+            const minCx = Math.floor((coord.x - radius) / cellSize);
+            const maxCx = Math.floor((coord.x + radius) / cellSize);
+            const minCy = Math.floor((coord.y - radius) / cellSize);
+            const maxCy = Math.floor((coord.y + radius) / cellSize);
+
+            const candidates = [];
+            for (let cy = minCy; cy <= maxCy; cy++) {
+                for (let cx = minCx; cx <= maxCx; cx++) {
+                    const cell = this.spatialGrid.get(this._cellKey(cx, cy));
+                    if (cell) {
+                        for (let i = 0; i < cell.length; i++) {
+                            const item = cell[i];
+                            const d = Math.hypot(item.x - coord.x, item.y - coord.y);
+                            if (d <= radius) {
+                                candidates.push(item);
+                            }
+                        }
+                    }
+                }
+            }
+            return candidates;
+        },
+
+        loadGeometry(geomData) {
+            this.clear();
+            if (!geomData || !geomData.paths || !Array.isArray(geomData.paths)) return;
+
+            this.geometry = geomData;
+            let totalPoints = 0;
+
+            for (const path of geomData.paths) {
+                const pts = path.points;
+                const tangents = path.tangents || [];
+                const pathId = path.id;
+                const isClosed = Boolean(path.is_closed);
+
+                if (!pts || pts.length < 2) continue;
+
+                // Index in pathsMap for polyline traversal
+                this.pathsMap.set(pathId, {
+                    id: pathId,
+                    points: pts,
+                    tangents: tangents,
+                    isClosed: isClosed,
+                    length: pts.length
+                });
+
+                for (let i = 0; i < pts.length; i++) {
+                    const x = pts[i][0];
+                    const y = pts[i][1];
+                    let tx = 0, ty = 0;
+                    if (tangents[i]) {
+                        tx = tangents[i][0];
+                        ty = tangents[i][1];
+                    } else if (i < pts.length - 1) {
+                        const dx = pts[i + 1][0] - x;
+                        const dy = pts[i + 1][1] - y;
+                        const len = Math.hypot(dx, dy) || 1.0;
+                        tx = dx / len;
+                        ty = dy / len;
+                    }
+
+                    const item = { x, y, tx, ty, pathId, ptIdx: i, isClosed };
+                    const cx = Math.floor(x / this.cellSize);
+                    const cy = Math.floor(y / this.cellSize);
+                    const key = this._cellKey(cx, cy);
+
+                    if (!this.spatialGrid.has(key)) {
+                        this.spatialGrid.set(key, []);
+                    }
+                    this.spatialGrid.get(key).push(item);
+                    totalPoints++;
+
+                    // Dense sub-sampling along segments (every ~4px)
+                    if (i > 0) {
+                        const px = pts[i - 1][0];
+                        const py = pts[i - 1][1];
+                        const segDist = Math.hypot(x - px, y - py);
+                        if (segDist > 6.0) {
+                            const steps = Math.max(1, Math.floor(segDist / 4.0));
+                            for (let s = 1; s < steps; s++) {
+                                const frac = s / steps;
+                                const ix = px + frac * (x - px);
+                                const iy = py + frac * (y - py);
+                                const icx = Math.floor(ix / this.cellSize);
+                                const icy = Math.floor(iy / this.cellSize);
+                                const ikey = this._cellKey(icx, icy);
+                                if (!this.spatialGrid.has(ikey)) {
+                                    this.spatialGrid.set(ikey, []);
+                                }
+                                this.spatialGrid.get(ikey).push({
+                                    x: ix, y: iy, tx, ty, pathId, ptIdx: i, isClosed
+                                });
+                                totalPoints++;
+                            }
+                        }
+                    }
+                }
+            }
+
+            console.log(`[ReferenceSnapper] Strict Blueprint Indexed ${totalPoints} points across ${geomData.paths.length} paths.`);
+        },
+
+        extractFromImageElement(imgElement) {
+            if (!imgElement || !imgElement.naturalWidth || !imgElement.naturalHeight) return;
+
+            try {
+                const offCanvas = document.createElement('canvas');
+                const targetW = 1080;
+                const targetH = 1920;
+                offCanvas.width = targetW;
+                offCanvas.height = targetH;
+                const offCtx = offCanvas.getContext('2d', { willReadFrequently: true });
+
+                const origW = imgElement.naturalWidth;
+                const origH = imgElement.naturalHeight;
+                const scale = Math.min(targetW / origW, targetH / origH);
+                const fitW = Math.round(origW * scale);
+                const fitH = Math.round(origH * scale);
+                const padX = Math.round((targetW - fitW) / 2);
+                const padY = Math.round((targetH - fitH) / 2);
+
+                offCtx.fillStyle = '#FFFFFF';
+                offCtx.fillRect(0, 0, targetW, targetH);
+                offCtx.drawImage(imgElement, padX, padY, fitW, fitH);
+
+                const imgData = offCtx.getImageData(0, 0, targetW, targetH);
+                const data = imgData.data;
+
+                // Estimate background luminance
+                let totalLum = 0;
+                let count = 0;
+                const sampleInterval = 10;
+                for (let y = padY; y < padY + fitH; y += sampleInterval) {
+                    for (let x = padX; x < padX + fitW; x += sampleInterval) {
+                        const idx = (y * targetW + x) * 4;
+                        totalLum += 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+                        count++;
+                    }
+                }
+                const meanLum = count > 0 ? (totalLum / count) : 180;
+                const isLightBg = meanLum > 120;
+
+                const paths = [];
+                const sampleStep = 4;
+                let currentPoints = [];
+                let currentPathId = 1;
+
+                for (let y = padY + 2; y < padY + fitH - 2; y += sampleStep) {
+                    for (let x = padX + 2; x < padX + fitW - 2; x += sampleStep) {
+                        const idx = (y * targetW + x) * 4;
+                        const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+                        const isLine = isLightBg ? (lum < meanLum - 28) : (lum > meanLum + 28);
+                        if (isLine) {
+                            const idxL = (y * targetW + (x - 2)) * 4;
+                            const idxR = (y * targetW + (x + 2)) * 4;
+                            const idxU = ((y - 2) * targetW + x) * 4;
+                            const idxD = ((y + 2) * targetW + x) * 4;
+                            const gx = (data[idxR] - data[idxL]);
+                            const gy = (data[idxD] - data[idxU]);
+                            const gLen = Math.hypot(-gy, gx) || 1.0;
+                            currentPoints.push([x, y]);
+                            if (currentPoints.length >= 80) {
+                                paths.push({
+                                    id: currentPathId++,
+                                    is_closed: false,
+                                    points: currentPoints,
+                                    tangents: currentPoints.map(() => [-gy / gLen, gx / gLen])
+                                });
+                                currentPoints = [];
+                            }
+                        }
+                    }
+                }
+                if (currentPoints.length > 5) {
+                    paths.push({
+                        id: currentPathId++,
+                        is_closed: false,
+                        points: currentPoints,
+                        tangents: currentPoints.map(() => [1.0, 0.0])
+                    });
+                }
+
+                this.loadGeometry({
+                    paths: paths,
+                    roi: [padX, padY, fitW, fitH],
+                    scale: scale
+                });
+            } catch (err) {
+                console.warn('[ReferenceSnapper] Client-side extraction error:', err);
+            }
+        },
+
+        snapStart(rawCoord) {
+            this.resetActiveStroke();
+            if (!this.isEnabled || !this.hasGeometry()) {
+                return { accepted: false, blocked: true, reason: 'no_blueprint' };
+            }
+
+            const cands = this._queryCandidates(rawCoord, this.snapRadius);
+            if (!cands || cands.length === 0) {
+                // Clicked in white area outside blueprint lines
+                return { accepted: false, blocked: true, reason: 'outside_blueprint' };
+            }
+
+            // Find closest candidate centerline point
+            let bestCand = null;
+            let bestDist = Infinity;
+            for (let i = 0; i < cands.length; i++) {
+                const d = Math.hypot(cands[i].x - rawCoord.x, cands[i].y - rawCoord.y);
+                if (d < bestDist) {
+                    bestDist = d;
+                    bestCand = cands[i];
+                }
+            }
+
+            if (!bestCand || bestDist > this.snapRadius) {
+                return { accepted: false, blocked: true, reason: 'outside_blueprint' };
+            }
+
+            const pt = { x: Math.round(bestCand.x), y: Math.round(bestCand.y) };
+            this.activePathId = bestCand.pathId;
+            this.activePtIdx = bestCand.ptIdx;
+            this.lastSnappedPoint = pt;
+            this.lastRawPoint = { x: rawCoord.x, y: rawCoord.y };
+            this.isPaused = false;
+
+            return {
+                accepted: true,
+                point: pt,
+                pathId: bestCand.pathId,
+                ptIdx: bestCand.ptIdx,
+                intermediatePoints: [pt]
+            };
+        },
+
+        snapMove(rawCoord) {
+            if (!this.isEnabled || !this.hasGeometry() || this.activePathId === null || !this.lastSnappedPoint) {
+                return { accepted: false, blocked: true, reason: 'no_active_stroke' };
+            }
+
+            const cands = this._queryCandidates(rawCoord, this.snapRadius);
+            if (!cands || cands.length === 0) {
+                // Pointer entered white area! Pause stroke at last valid point.
+                this.isPaused = true;
+                this.lastRawPoint = { x: rawCoord.x, y: rawCoord.y };
+                return { accepted: false, blocked: true, reason: 'white_area' };
+            }
+
+            // Calculate user movement vector
+            let dirUser = null;
+            if (this.lastRawPoint) {
+                const dx = rawCoord.x - this.lastRawPoint.x;
+                const dy = rawCoord.y - this.lastRawPoint.y;
+                const len = Math.hypot(dx, dy);
+                if (len >= 1.5) {
+                    dirUser = [dx / len, dy / len];
+                }
+            }
+
+            const activePath = this.pathsMap.get(this.activePathId);
+            if (!activePath) {
+                this.isPaused = true;
+                return { accepted: false, blocked: true, reason: 'invalid_path' };
+            }
+
+            let bestCand = null;
+            let bestScore = Infinity;
+
+            for (let i = 0; i < cands.length; i++) {
+                const cand = cands[i];
+                const dRaw = Math.hypot(cand.x - rawCoord.x, cand.y - rawCoord.y);
+                const dStep = Math.hypot(cand.x - this.lastSnappedPoint.x, cand.y - this.lastSnappedPoint.y);
+                const isSamePath = (cand.pathId === this.activePathId);
+
+                if (isSamePath) {
+                    // Strict continuity along active path: step must not exceed maxStepDistance
+                    if (dStep > this.maxStepDistance) {
+                        continue;
+                    }
+                } else {
+                    // Transition to different path: ONLY allowed at an intersection right at lastSnappedPoint (<= 14px)
+                    if (dStep > 14.0) {
+                        continue; // Forbid jumping to parallel or disconnected lines!
+                    }
+                }
+
+                // Tangent / movement alignment
+                let alignPenalty = 0.0;
+                if (dirUser && (cand.tx !== 0 || cand.ty !== 0)) {
+                    const dot = dirUser[0] * cand.tx + dirUser[1] * cand.ty;
+                    const absDot = Math.abs(dot);
+                    alignPenalty = 25.0 * (1.0 - absDot);
+
+                    // If crossing to another path at junction, movement must align strongly with new branch
+                    if (!isSamePath && absDot < 0.70) {
+                        continue; // Ambiguous intersection - pause instead of guessing!
+                    }
+                }
+
+                let score = dRaw + 0.08 * dStep + alignPenalty;
+                if (isSamePath) {
+                    score -= 15.0; // Path continuity bonus
+                } else {
+                    score += 25.0; // Branch switch penalty
+                }
+
+                if (score < bestScore) {
+                    bestScore = score;
+                    bestCand = cand;
+                }
+            }
+
+            if (!bestCand) {
+                // No candidate meets strict continuity: user jumped across gap or ambiguous intersection
+                this.isPaused = true;
+                this.lastRawPoint = { x: rawCoord.x, y: rawCoord.y };
+                return { accepted: false, blocked: true, reason: 'discontinuity_blocked' };
+            }
+
+            // Valid candidate on centerline! Extract intermediate points if multiple steps occurred
+            const intermediatePoints = [];
+            if (bestCand.pathId === this.activePathId && this.activePtIdx !== null) {
+                const fromIdx = this.activePtIdx;
+                const toIdx = bestCand.ptIdx;
+                const pts = activePath.points;
+                const total = pts.length;
+
+                if (toIdx !== fromIdx && Math.abs(toIdx - fromIdx) > 1) {
+                    const step = (toIdx > fromIdx) ? 1 : -1;
+                    let curr = fromIdx + step;
+                    let count = 0;
+                    while (curr !== toIdx && count < 8) {
+                        if (curr < 0) {
+                            if (activePath.isClosed) curr = total - 1; else break;
+                        } else if (curr >= total) {
+                            if (activePath.isClosed) curr = 0; else break;
+                        }
+                        intermediatePoints.push({ x: Math.round(pts[curr][0]), y: Math.round(pts[curr][1]) });
+                        curr += step;
+                        count++;
+                    }
+                }
+            }
+
+            const targetPt = { x: Math.round(bestCand.x), y: Math.round(bestCand.y) };
+            intermediatePoints.push(targetPt);
+
+            // Advance state
+            this.activePathId = bestCand.pathId;
+            this.activePtIdx = bestCand.ptIdx;
+            this.lastSnappedPoint = targetPt;
+            this.lastRawPoint = { x: rawCoord.x, y: rawCoord.y };
+            this.isPaused = false;
+
+            return {
+                accepted: true,
+                point: targetPt,
+                intermediatePoints: intermediatePoints,
+                pathId: bestCand.pathId,
+                ptIdx: bestCand.ptIdx
+            };
+        },
+
+        snapPoint(rawCoord, relTime, isNewStroke = false) {
+            if (isNewStroke) {
+                const res = this.snapStart(rawCoord);
+                if (res.accepted) {
+                    return {
+                        point: res.point,
+                        snapped: true,
+                        confidence: 1.0,
+                        pathId: res.pathId,
+                        accepted: true,
+                        intermediatePoints: res.intermediatePoints
+                    };
+                } else {
+                    return {
+                        point: rawCoord,
+                        snapped: false,
+                        confidence: 0,
+                        accepted: false,
+                        blocked: true,
+                        reason: res.reason
+                    };
+                }
+            } else {
+                const res = this.snapMove(rawCoord);
+                if (res.accepted) {
+                    return {
+                        point: res.point,
+                        snapped: true,
+                        confidence: 1.0,
+                        pathId: res.pathId,
+                        accepted: true,
+                        intermediatePoints: res.intermediatePoints
+                    };
+                } else {
+                    return {
+                        point: this.lastSnappedPoint || rawCoord,
+                        snapped: false,
+                        confidence: 0,
+                        accepted: false,
+                        blocked: true,
+                        reason: res.reason
+                    };
+                }
+            }
+        },
+
+        finishStroke(strokePoints) {
+            if (!strokePoints || strokePoints.length < 6) {
+                this.resetActiveStroke();
+                return;
+            }
+
+            // Closed-loop gap recovery if endpoints are within 20px
+            const p0 = strokePoints[0];
+            const pN = strokePoints[strokePoints.length - 1];
+            const gap = Math.hypot(p0.x - pN.x, p0.y - pN.y);
+            if (gap <= 20.0) {
+                strokePoints[strokePoints.length - 1].x = p0.x;
+                strokePoints[strokePoints.length - 1].y = p0.y;
+            }
+
+            this.resetActiveStroke();
+        }
+    };
+
+    // --- Toast / Feedback Indicator ---
+    function showToast(msg) {
+        let toast = document.getElementById('tracingToast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'tracingToast';
+            toast.className = 'tracing-toast';
+            if (canvasWrapper) {
+                canvasWrapper.appendChild(toast);
+            }
+        }
+        if (toast) {
+            toast.textContent = msg;
+            toast.classList.add('visible');
+            clearTimeout(toast._timeout);
+            toast._timeout = setTimeout(() => {
+                toast.classList.remove('visible');
+            }, 2200);
+        }
+    }
+
+    // --- Pointer Events for Strict Blueprint Tracing with Real-Time Snapping ---
     function onPointerDown(e) {
         if (e.button !== 0 && e.pointerType === 'mouse') return;
 
-        drawingCanvas.setPointerCapture(e.pointerId);
-        isDrawing = true;
         const coords = getCanvasCoords(e);
         const relTime = Math.round(performance.now() - sessionStartTime);
 
         if (currentTool === 'brush') {
+            if (!ReferenceSnapper.hasGeometry()) {
+                showToast("Strict Blueprint Mode: Please upload a reference image to trace.");
+                return;
+            }
+
+            const snapResult = ReferenceSnapper.snapStart(coords);
+            if (!snapResult.accepted) {
+                // Clicked outside blueprint lines (white area)
+                showToast("Start tracing directly on a reference line.");
+                return;
+            }
+
+            drawingCanvas.setPointerCapture(e.pointerId);
+            isDrawing = true;
+
+            const pt = snapResult.point;
             activeStroke = {
                 id: `stroke_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
                 color: currentColor,
                 width: currentBrushSize,
-                points: [{ x: coords.x, y: coords.y, t: relTime }]
+                points: [{ x: pt.x, y: pt.y, t: relTime }],
+                rawPoints: [{ x: coords.x, y: coords.y, t: relTime }]
             };
 
             ctx.save();
@@ -155,10 +674,12 @@
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
             ctx.beginPath();
-            ctx.arc(coords.x, coords.y, currentBrushSize / 2, 0, Math.PI * 2);
+            ctx.arc(pt.x, pt.y, currentBrushSize / 2, 0, Math.PI * 2);
             ctx.fill();
             ctx.restore();
         } else if (currentTool === 'eraser') {
+            drawingCanvas.setPointerCapture(e.pointerId);
+            isDrawing = true;
             eraseNearPoint(coords.x, coords.y);
         }
     }
@@ -169,12 +690,17 @@
         const relTime = Math.round(performance.now() - sessionStartTime);
 
         if (currentTool === 'brush' && activeStroke) {
+            activeStroke.rawPoints.push({ x: coords.x, y: coords.y, t: relTime });
+
+            const snapResult = ReferenceSnapper.snapMove(coords);
+            if (!snapResult.accepted) {
+                // Pointer in white area or gap: stroke pauses, NO segment drawn across gap
+                return;
+            }
+
+            const newPts = snapResult.intermediatePoints || [snapResult.point];
             const pts = activeStroke.points;
             const lastPt = pts[pts.length - 1];
-
-            if (lastPt.x === coords.x && lastPt.y === coords.y) return;
-
-            pts.push({ x: coords.x, y: coords.y, t: relTime });
 
             ctx.save();
             ctx.strokeStyle = activeStroke.color;
@@ -183,7 +709,13 @@
             ctx.lineJoin = 'round';
             ctx.beginPath();
             ctx.moveTo(lastPt.x, lastPt.y);
-            ctx.lineTo(coords.x, coords.y);
+
+            for (let i = 0; i < newPts.length; i++) {
+                const p = newPts[i];
+                pts.push({ x: p.x, y: p.y, t: relTime });
+                ctx.lineTo(p.x, p.y);
+            }
+
             ctx.stroke();
             ctx.restore();
         } else if (currentTool === 'eraser') {
@@ -192,16 +724,19 @@
     }
 
     function onPointerUp(e) {
-        if (!isDrawing) return;
+        if (!isDrawing && !activeStroke) return;
         isDrawing = false;
         try {
             drawingCanvas.releasePointerCapture(e.pointerId);
         } catch (_) {}
 
         if (currentTool === 'brush' && activeStroke) {
-            if (activeStroke.points.length > 0) {
+            if (activeStroke.points.length >= 2) {
+                ReferenceSnapper.finishStroke(activeStroke.points);
                 strokes.push(activeStroke);
+                undoStack.push({ type: 'stroke', stroke: activeStroke });
                 redoStack = [];
+                updateUndoRedoButtons();
             }
             activeStroke = null;
             redrawAllStrokes();
@@ -279,12 +814,18 @@
     }
 
     function updateUndoRedoButtons() {
-        btnUndo.disabled = (strokes.length === 0 && undoStack.length === 0);
-        btnRedo.disabled = (redoStack.length === 0);
+        const canUndo = (strokes.length > 0 || undoStack.length > 0);
+        const canRedo = (redoStack.length > 0);
+        btnUndo.disabled = !canUndo;
+        btnRedo.disabled = !canRedo;
+        if (btnFloatUndo) btnFloatUndo.disabled = !canUndo;
+        if (btnFloatRedo) btnFloatRedo.disabled = !canRedo;
     }
 
     btnUndo.addEventListener('click', undo);
     btnRedo.addEventListener('click', redo);
+    if (btnFloatUndo) btnFloatUndo.addEventListener('click', undo);
+    if (btnFloatRedo) btnFloatRedo.addEventListener('click', redo);
 
     window.addEventListener('keydown', (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
@@ -362,11 +903,27 @@
             });
             const data = await res.json();
             if (data.success) {
+                currentReferenceFilename = data.filename;
                 refImage.src = data.image_url;
                 refImage.style.display = 'block';
                 refPlaceholder.style.display = 'none';
                 btnRemoveRef.style.display = 'inline-flex';
                 uploadLabel.textContent = 'Change Image';
+
+                // Invalidate old strokes and geometry when a new blueprint is loaded
+                strokes = [];
+                undoStack = [];
+                redoStack = [];
+                redrawAllStrokes();
+
+                // Load reference geometry for live browser snapping
+                if (data.geometry && data.geometry.paths && data.geometry.paths.length > 0) {
+                    ReferenceSnapper.loadGeometry(data.geometry);
+                } else {
+                    refImage.onload = () => {
+                        ReferenceSnapper.extractFromImageElement(refImage);
+                    };
+                }
             } else {
                 alert(`Upload failed: ${data.error}`);
                 uploadLabel.textContent = 'Upload Image';
@@ -381,12 +938,24 @@
     });
 
     btnRemoveRef.addEventListener('click', () => {
+        currentReferenceFilename = null;
+        ReferenceSnapper.clear();
+        strokes = [];
+        undoStack = [];
+        redoStack = [];
+        redrawAllStrokes();
         refImage.src = '';
         refImage.style.display = 'none';
         refPlaceholder.style.display = 'flex';
         btnRemoveRef.style.display = 'none';
         uploadLabel.textContent = 'Upload Image';
     });
+
+    if (refCorrectionToggle) {
+        refCorrectionToggle.addEventListener('change', (e) => {
+            ReferenceSnapper.setEnabled(e.target.checked);
+        });
+    }
 
     refOpacitySlider.addEventListener('input', (e) => {
         const val = e.target.value;
@@ -459,7 +1028,10 @@
             canvas: { width: 1080, height: 1920 },
             title: videoTitle.value.trim() || 'AK Kolam',
             dot_grid: dotGridSelect.value,
-            strokes: strokes
+            strokes: strokes,
+            reference_image: currentReferenceFilename,
+            correction_enabled: refCorrectionToggle ? refCorrectionToggle.checked : true,
+            live_aligned: Boolean(ReferenceSnapper.hasGeometry() && (refCorrectionToggle ? refCorrectionToggle.checked : true))
         };
 
         jobModal.style.display = 'flex';

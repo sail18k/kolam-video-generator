@@ -11,7 +11,11 @@
 
 The **Headless Kolam Video Generator V2** is an automated, end-to-end multimedia generative pipeline designed to turn hand-drawn sketches, traditional Kolam patterns, and Rangoli drawings into high-retention, YouTube Shorts-compliant vertical videos (`1080x1920`, `25 FPS`, H.264, vertical 9:16 aspect ratio, duration < 60s).
 
-The pipeline operates completely **headless** (zero GUI, zero manual human intervention required for rendering) and integrates:
+The system supports two complementary workflows:
+1. **Automated Headless CLI Workflow:** Turn static sketch images into progressively drawn videos with zero manual human intervention.
+2. **Interactive Drawing Studio Workflow:** Web-based freehand drawing studio accessible locally and over Wi-Fi/LAN, allowing real-time tracing over semi-transparent reference sketches with touch/mouse/stylus.
+
+Core generative subsystems:
 1. **Multimodal Visual Classification** (Local LLM via Ollama LLaVA-7B with deterministic OpenCV geometric/HSV fallbacks).
 2. **Parametric Dot Grid Generation** (Standard pulli diamond/matrix grids).
 3. **Continuous Path Vectorization** (Bezier loop weaving for Sikku, radial concentric contour tracing for Mandalas/Rangolis).
@@ -20,6 +24,7 @@ The pipeline operates completely **headless** (zero GUI, zero manual human inter
 6. **Acoustic Vocal-Removed BGM Processing** (Center-channel vocal attenuation with punchy low-frequency bass preservation, looped seamlessly and muxed via FFmpeg).
 7. **Dynamic Bilingual SEO & Metadata Engine** (Tamil + English click-worthy titles, descriptions, and motif-aware tags).
 8. **YouTube Data API v3 Automated Publishing** (Direct OAuth2 upload with custom thumbnail attachment and automated categorization).
+9. **LAN-Accessible Interactive Drawing Studio** (Lightweight Flask backend, responsive HTML5/Canvas frontend, structured vector stroke recording, and real-time generation polling).
 
 ---
 
@@ -60,13 +65,17 @@ All AI agents executing, profiling, or debugging code on this system must accoun
 ```text
 D:\kolam video generation v2\
 │
-├── generate.py                     # [Entrypoint] Main orchestration CLI script
+├── generate.py                     # [CLI Entrypoint] Automated image-to-video orchestrator
+├── web_app.py                      # [Web Entrypoint] Interactive Drawing Studio server & REST API
 ├── upload_to_youtube.py            # [CLI Tool] Standalone YouTube Shorts uploader
-├── requirements.txt                # Core Python package dependencies
+├── requirements.txt                # Core Python package dependencies (Flask, OpenCV, etc.)
 ├── README.md                       # High-level project documentation
 ├── AI_SYSTEM_DOC.md                # [This File] Master specification for AI agents
 │
 ├── generate.bat                    # One-click batch runner (drag-and-drop input image)
+├── start.bat                       # Automated server launcher (LAN discovery, port conflict check, auto-browser)
+├── stop.bat                        # Graceful server shutdown & port 8000 cleanup script
+├── start_drawing_studio.bat        # Legacy launcher for Drawing Studio
 ├── upload_to_youtube.bat           # One-click batch uploader for latest outputs
 ├── reset_youtube_account.bat       # Token flush script to switch Google accounts
 │
@@ -78,6 +87,8 @@ D:\kolam video generation v2\
 │   ├── classifier.py               # Visual classification (Ollama LLaVA + CV heuristics)
 │   ├── dot_generator.py            # Mathematical dot matrix & pulli grid generator
 │   ├── path_generator.py           # Path calculation, Bezier interpolation & contour tracing
+│   ├── manual_drawing.py           # Freehand vector stroke normalization & path synthesis
+│   ├── reference_alignment.py      # Reference-guided stroke correction & Viterbi path alignment
 │   ├── renderer.py                 # NVENC/OpenCV frame renderer, hand & badge overlays
 │   ├── thumbnail_generator.py      # Auspicious color filling, 3D powder & cover generator
 │   ├── audio_processor.py          # Acoustic vocal removal, DSP filter graph & audio muxer
@@ -89,18 +100,37 @@ D:\kolam video generation v2\
 │       ├── wood.jpg                # 1080x1920 realistic wood background texture
 │       └── wood1.jpg               # Alternative wood surface texture
 │
+├── web/                            # Interactive Drawing Studio Web Frontend
+│   ├── templates/                  # Jinja2 HTML templates
+│   │   └── studio.html             # Responsive 9:16 drawing studio interface with floating controls
+│   └── static/                     # Frontend static assets
+│       ├── studio.css              # Dark-mode styling, responsive multi-breakpoint layout & touch protection
+│       └── studio.js               # Pointer event drawing, stroke recorder, undo/redo, floating buttons & API polling
+│
 ├── inputs/                         # Input sketches and reference materials
+│   ├── uploads/                    # Reference images uploaded via Drawing Studio
 │   ├── 77d59084...-sketch (1).jpg  # Sample input sketch
 │   └── reference.mp4               # Golden reference target video
+│
+├── tests/                          # Automated unit and integration test suite
+│   ├── test_manual_drawing.py      # Tests stroke clamping, pen-up signals & sketch creation
+│   ├── test_web_api.py             # Integration tests for Flask endpoints & uploads
+│   ├── test_reference_alignment.py # Tests skeleton thinning, line extraction & geometry matching
+│   ├── test_end_to_end_alignment_render.py # E2E alignment to GPU NVENC video rendering test
+│   ├── test_end_to_end_render.py   # Complete vector-to-video NVENC rendering test
+│   ├── test_live_snapping.py       # Geometry serialization & live residual refinement tests
+│   └── test_browser_snapping.js    # Node.js test suite for browser ReferenceSnapper engine
 │
 └── outputs/                        # Generated output artifacts (*.mp4, *_thumbnail.jpg, *_metadata.txt)
 ```
 
 ---
 
-## 4. End-to-End Pipeline Workflow
+## 4. End-to-End Pipeline Workflows
 
-The execution flow consists of 7 sequential phases coordinated by [generate.py](file:///d:/kolam%20video%20generation%20v2/generate.py):
+### 4.1 Automated Headless CLI Workflow (`generate.py`)
+
+The automated execution flow turns an existing image file into a video via 8 sequential phases:
 
 ```mermaid
 flowchart TD
@@ -122,6 +152,62 @@ flowchart TD
     
     I -->|--upload or Interactive Yes| J["Phase 8: YouTube Uploader (engine/youtube_uploader.py)"]
     I -->|--no-upload or Skipped| K["Finished: Ready in outputs/"]
+```
+
+### 4.2 Interactive Drawing Studio Workflow (`web_app.py`)
+
+The interactive workflow records human drawing strokes in real-time over an optional semi-transparent reference sketch, applies live in-browser reference snapping onto preprocessed skeletons, provides non-destructive residual refinement on the backend, and renders the exact stroke sequence into the identical video composition:
+
+```mermaid
+flowchart TD
+    subgraph Browser ["Web Client (Phone / Tablet / PC Browser)"]
+        UI["Drawing Studio UI (1080x1920 Logical Canvas)"]
+        Ref["Uploaded Reference Sketch (Adjustable Opacity 0-100%)"]
+        Grid["In-Memory Spatial Grid Index (ReferenceSnapper, 25px cells)"]
+        Pointer["Pointer Movement (Mouse, Touch, Stylus)"]
+        LiveSnap["Real-Time Attraction & Canvas Draw (lineTo corrected point)"]
+        Float["Floating Canvas Quick Controls (Undo / Redo)"]
+        Payload["Structured Vector Stroke Payload (live_aligned=true, ref_image, ref_correction)"]
+
+        Ref --> UI
+        Ref -.->|Skeleton Geometry JSON| Grid
+        Pointer --> LiveSnap
+        Grid -.-> LiveSnap
+        LiveSnap --> UI
+        Float --> UI
+        UI --> Payload
+    end
+
+    subgraph Backend ["Server & Processing Pipeline (web_app.py)"]
+        API["Flask REST API: POST /api/generate"]
+        Queue["Background Async Job Queue (1 GPU Job at a Time)"]
+        Route{"live_aligned == true?"}
+        Residual["refine_live_aligned_strokes (Boundary clamping, loop closure, gentle smoothing)"]
+        FullCorr["correct_stroke_sequence (Full multi-cue skeleton & Viterbi deformation)"]
+        ManualEng["engine/manual_drawing.py (Validation & Path Synthesis)"]
+        SketchGen["Monochrome Sketch Synthesis (temp_sketch.png)"]
+        ThumbGen["engine/thumbnail_generator.py (Colorized Short Cover)"]
+        Render["engine/renderer.py (NVENC 1080x1920 @ 25 FPS + Hand Animation)"]
+        Audio["engine/audio_processor.py (Vocal Removal + BGM Muxing)"]
+        SEO["engine/seo_generator.py (Dynamic Tamil + English Metadata)"]
+        Complete["Output Artifacts (*.mp4, *_thumbnail.jpg, *_metadata.txt)"]
+
+        Payload --> API
+        API --> Queue
+        Queue --> Route
+        Route -->|Yes: Client already snapped live| Residual
+        Route -->|No: Legacy / CLI freehand tracing| FullCorr
+        Residual --> ManualEng
+        FullCorr --> ManualEng
+        ManualEng -->|Ordered Path with None Delimiters| Render
+        ManualEng -->|Black Strokes on White| SketchGen
+        SketchGen --> ThumbGen
+        ThumbGen -->|Cover Teaser (15 frames)| Render
+        Render --> Audio
+        Audio --> SEO
+        SEO --> Complete
+        Complete -->|Status Polling & Video Stream| UI
+    end
 ```
 
 ---
@@ -275,8 +361,117 @@ flowchart TD
 
 ### 5.10 Automation Batch Scripts
 - `generate.bat`: Windows drag-and-drop interface. Allows dropping any image directly onto the batch file to initiate generation.
+- `start_drawing_studio.bat`: One-click launcher for the Drawing Studio. Discovers host LAN IP, opens local browser to port 8000, and starts the server on `0.0.0.0:8000`.
 - `upload_to_youtube.bat`: Automatically scans `outputs/` for the most recent metadata or `.mp4` file and initiates upload.
 - `reset_youtube_account.bat`: Clears `youtube_token.pickle` to force re-authentication with a different Google account.
+
+---
+
+### 5.11 Interactive Drawing Studio Server (`web_app.py`)
+- **Module Purpose:** Provides a LAN-accessible Flask REST API and job worker for interactive drawing, reference sketch upload, and background rendering.
+- **Network Binding:** Binds to `0.0.0.0:<port>` (default 8000) for local and Wi-Fi access. Automatically resolves the primary LAN IPv4 address (e.g. `192.168.1.10`) via UDP socket probing and prints local and network access links.
+- **Asynchronous GPU Job Worker:** Manages an in-memory job queue with a dedicated worker thread (`worker_thread`), ensuring only one GPU NVENC rendering job executes at any given time to protect VRAM.
+- **REST Endpoints:**
+  - `GET /` — Serves the interactive drawing studio HTML.
+  - `GET /api/system-info` — Returns network address, port, and online status.
+  - `POST /api/upload-reference` — Validates and stores reference images in `inputs/uploads/`. Extracts and returns precomputed `geometry` JSON payload (paths, tangents, scale, ROI) for immediate client-side spatial grid construction. **Strict Blueprint Validation:** Requires detectable black linework (`len(paths) > 0` and `len(skel_points) >= 8`). Rejects blank or unrecognizable images with HTTP 400 (`"No valid black linework or Kolam patterns detected on the blueprint. Please upload a clear sketch with dark lines."`).
+  - `GET /api/uploads/<filename>` — Serves uploaded reference images safely.
+  - `POST /api/generate` — Validates drawing strokes (including `live_aligned` flag) and enqueues video rendering.
+  - `GET /api/jobs/<job_id>` — Returns real-time stage, progress percentage (0-100%), and artifact URLs.
+  - `GET /api/jobs/<job_id>/video` — Streams rendered MP4 video.
+  - `GET /api/jobs/<job_id>/thumbnail` — Streams generated YouTube Short thumbnail.
+- **Dual-Mode Stroke Routing:**
+  - If payload contains `live_aligned: true`, the worker invokes `refine_live_aligned_strokes` in `engine/reference_alignment.py` for conservative boundary clamping, loop gap closure, sub-stroke gap splitting, and gentle moving-average smoothing.
+  - If `live_aligned: false` or omitted, it executes full `correct_stroke_sequence` (Viterbi deformation).
+
+
+---
+
+### 5.12 Manual Drawing Vector Synthesis (`engine/manual_drawing.py`)
+- **Module Purpose:** Validates client-submitted vector stroke data, clamps coordinates to $0 \le x < 1080$ and $0 \le y < 1920$, and synthesizes renderer-compatible ordered paths.
+- **Stroke Delimiter Translation:** Injects `None` pen-up signals between independent strokes so separate artistic strokes are never accidentally connected.
+- **Gap Detection & Discontinuous Jump Splitting:** Checks Euclidean distance between successive stroke points. If $\Delta > 40\text{px}$, the engine automatically splits the path with a `None` pen-up delimiter so the renderer and NVENC hand animation never interpolate or draw across white gaps.
+- **Dense Path Interpolation:** Steps along user segments (max step 4 px) so quick swipes and touches produce smooth, uninterrupted line trajectories for the hand sprite and NVENC encoder.
+- **Sketch Image Synthesis (`render_strokes_to_sketch_image`):** Draws vector strokes as crisp black lines on a 1080x1920 white canvas (`temp_sketch.png`). Automatically skips drawing line segments across gaps $> 40\text{px}$. This temporary sketch is passed directly to `generate_kolam_thumbnail()` so the existing auspicious colorization and 3D powder depth engine can produce high-CTR thumbnails for manually drawn patterns.
+
+---
+
+### 5.13 Studio Frontend Interface (`web/`)
+- **Module Purpose:** Fully responsive, touch-protected digital drawing canvas running seamlessly across desktop, tablet, and smartphone browsers.
+- **Stack:** HTML5, CSS3, Vanilla ES6 JavaScript (zero external node/bundler dependencies).
+- **Responsive Multi-Breakpoint Layout:**
+  - **Desktop (>1080px):** 290px left sidebar dock, spacious controls, centered 9:16 vertical canvas.
+  - **Laptops & Tablets in Landscape (769px - 1080px):** 250px left dock with compact padding, maximizing drawing canvas visibility.
+  - **Tablets in Portrait & Smartphones (<=768px):** Transformed into a bottom horizontal scroll dock (`height: 86px`, `flex-wrap: nowrap`, `overflow-x: auto`) with a custom golden scrollbar. Leaves over 80% of vertical screen height exclusively for the drawing canvas instead of stacking rows vertically.
+  - **Two-Tier Mobile Header:** Compact two-row header with logo and primary `Generate Video` action on top, and Channel Title and Dot Grid selector side-by-side on row two.
+  - **Small Phones (<=480px):** Scaled badges and icons, optimized margins, and compact button sizing.
+  - **Mobile Landscape Mode (`max-height: 520px` & `orientation: landscape`):** Shifts to an ultra-slim 180px left dock with 40px slim header to maximize canvas height on rotated devices.
+- **Floating Canvas Quick Controls:**
+  - Glassmorphism Undo (`↩️`) and Redo (`↪️`) buttons (`.floating-controls`, `.btn-float`) positioned directly on the top-left canvas viewport.
+  - Allows one-tap thumb undo/redo on mobile and touch devices without needing to scroll the bottom toolbar dock to the history card.
+  - Fully synchronized with keyboard shortcuts (`Ctrl+Z`, `Ctrl+Y`) and toolbar buttons.
+- **Touch & Gesture Protections:**
+  - Configured `overscroll-behavior: none; touch-action: manipulation;` on `html, body` and `touch-action: none;` on canvas layers.
+  - Completely eliminates elastic bounce, pull-to-refresh collisions, and gesture interference during drawing sessions.
+- **Dynamic Coordinate Transformation:**
+  - Uses `getBoundingClientRect()` with dynamic scale factors (`scaleX = 1080 / rect.width`, `scaleY = 1920 / rect.height`) to map physical screen pixels to the 1080x1920 logical canvas coordinates with pixel-perfect precision regardless of device pixel ratio (DPR), viewport zoom, or screen size.
+- **Strict Blueprint-Only Tracing Engine (`ReferenceSnapper`):**
+  - **Non-Negotiable Constraint:** Tracing is strictly constrained to the extracted blueprint centerline geometry. Freehand drawing in white areas is completely prohibited.
+  - **Strict Blocking on Pointer Down:** Clicking or touching in white space ($> 26\text{px}$ from the centerline) is blocked immediately (`accepted: false, blocked: true`), showing an unobtrusive toast notification: *"⚠️ Tracing restricted to blueprint lines. Click directly on a black line to start tracing."* No stroke is created.
+  - **Departure & Pause Behavior:** If the pointer leaves the permitted line geometry (moves $> 26\text{px}$ away from centerline or steps $> 35\text{px}$), tracing pauses at the last valid centerline point. Raw pointer coordinates in white space are strictly rejected.
+  - **Continuity & Gap Jump Prevention:** Moving across white gaps ($> 35\text{px}$ step) or jumping to disconnected/parallel lines ($> 14\text{px}$ perpendicular offset while path is active) is rejected. No bridging segments or straight connecting lines are ever fabricated.
+  - **Resume Behavior:** Tracing resumes seamlessly only if the pointer returns to a valid continuation of the active path ($\le 35\text{px}$). If the user moves to a disconnected line, they must lift their pen/finger and start a new stroke directly on that line.
+  - **Centerline Conformance & Intermediate Curve Extraction:** All recorded points lie exactly on the extracted 1px skeleton path. Rapid movements dynamically interpolate intermediate centerline points along the curve.
+  - **Closed-Loop Endpoint Recovery:** When pen lifts within $20\text{px}$ of the stroke start point, the loop is closed cleanly to the first point.
+  - **Blueprint Replacement & Invalidation:** Replacing or removing the blueprint immediately wipes all canvas strokes, invalidates the spatial index, and resets drawing state.
+  - **Spatial Grid Index:** Reconstructs a $20\text{px}$ spatial hash grid (`cellSize = 20`, dense 4-6px point sampling) from preprocessed reference polylines and tangents, enabling sub-millisecond neighbor queries.
+  - **Preserved Vector Hierarchy:** Stores exact centerline coordinates in `activeStroke.points` and raw pointer samples in `activeStroke.rawPoints`. Preserves stroke sequence, drawing direction, timing, and brush attributes.
+  - **Explicit Backend Contract:** Sets `live_aligned: true` in the generation payload. The backend detects this and applies conservative residual refinement (`refine_live_aligned_strokes`) instead of duplicate aggressive Viterbi re-warping.
+
+---
+
+### 5.14 Reference-Guided Stroke Alignment Engine (`engine/reference_alignment.py`)
+- **Module Purpose:** Corrects human drawing inaccuracies using uploaded reference Kolam/Rangoli sketches without altering the human's stroke order, direction, or style.
+- **Fundamental Principle:** Human tracing determines *WHAT* to draw and the *ORDER* to draw it; the reference image determines *WHERE* the corrected strokes should go.
+- **Core Algorithms:**
+  1. **Aspect-Ratio Canvas Fitting:** Scales and centers arbitrary-sized reference images into the logical $1080 \times 1920$ canvas using CSS `object-fit: contain` geometry so that pixel coordinates match the drawing canvas identically.
+  2. **Multi-Cue Line Extraction:** Combines CLAHE contrast enhancement, adaptive thresholding, Otsu binarization, and Canny edge gradients to extract lines from black-and-white sketches, colored Rangolis, and photos with dark or light backgrounds.
+  3. **Golay Morphological Thinning & Topology Decomposition:** Extracts an exact 1-pixel-wide skeleton using morphological hit-or-miss operations, segments non-branching simple curves (`ReferencePath`), and builds a spatial `cKDTree`.
+  4. **Orientation Field Estimation:** Computes continuous line orientation angles $\theta \in [0, \pi)$ via the structure tensor ($J_{xx}, J_{yy}, J_{xy}$).
+  5. **Dual-Tier Geometric Correction:**
+     - **Tier 1 (High Confidence):** Maps strokes to corresponding reference subsegments, preserving endpoints and drawing direction.
+     - **Tier 2 (Multi-Branch / Crossing):** Employs Viterbi dynamic programming map-matching across skeleton points with orientation and step penalties to navigate complex intersections without switching lines.
+     - **Tier 3 (Low Confidence / Freehand):** Preserves original human strokes without unjustified warping.
+  6. **Geometry Serialization for Client-Side Snapping (`serialize_reference_geometry`):**
+     - Extracts reference skeleton polylines, unit tangents $(t_x, t_y)$, canvas ROI offsets, and scaling ratios into an ultra-compact JSON object (< 50 KB).
+     - Bundled directly in `POST /api/upload-reference` responses to hydrate the frontend spatial grid index.
+  7. **Residual Refinement for Live-Snapped Strokes (`refine_live_aligned_strokes`):**
+     - When `live_aligned: true` is received, avoids re-running heavy Viterbi deformation.
+     - **Sub-Stroke Gap Splitting:** If distance between consecutive points in a stroke exceeds $35\text{px}$, the stroke is automatically split into independent sub-strokes, guaranteeing no straight lines across gaps.
+     - Applies conservative residual polish: strict coordinate clamping ($[0, 1079] \times [0, 1919]$), closed-loop endpoint recovery ($\le 20\text{px}$), and subtle moving-average smoothing ($w=3$).
+  8. **Thumbnail & Video Flow:** Outputs corrected vector strokes to `render_strokes_to_sketch_image` and `strokes_to_renderer_path` so both the thumbnail and progressive video reflect the corrected art while keeping the reference image off the final video canvas.
+
+---
+
+### 5.15 Automation & Server Control Scripts (`start.bat` & `stop.bat`)
+- **`start.bat` Production Server Launcher:**
+  - **Syntax:** `start.bat [port] [--no-browser | /nobrowser | -n] [--foreground | /foreground | -f]` (default port: `8000`).
+  - Performs pre-flight validation on Python 3.10 and PATH availability.
+  - Inspects target port via `netstat -aon` to detect active server instances and prevent duplicate binding collisions.
+  - Dynamically discovers the host machine's primary LAN IPv4 address via non-blocking UDP probe (`socket.connect(('8.8.8.8', 80))`).
+  - Displays formatted Localhost and Wi-Fi LAN access URLs with clear instructions and Windows Defender Firewall commands for phone/tablet connectivity.
+  - **Foreground Mode (`--foreground` / `-f`):** Executes `python web_app.py` directly inside the current terminal window with standard Ctrl+C interrupt handling.
+  - **Background Mode (Default):** Spawns `python web_app.py --host 0.0.0.0 --port <PORT>` in a dedicated console window titled `"Kolam Studio Server (Port <PORT>)"` with working directory set via `/D "%~dp0"`.
+  - Records the active process ID into `server.pid` for clean shutdown.
+  - Automatically launches the default web browser to `http://localhost:<PORT>` (suppressible via `--no-browser`).
+- **`stop.bat` Production Server Terminator:**
+  - **Syntax:** `stop.bat [port]` (default port: `8000`).
+  - Reads `server.pid` and executes `taskkill /f /t /pid <PID>` to recursively terminate the Python server and its entire process tree.
+  - Sweeps the target port with `netstat -aon` to terminate any lingering listeners and removes `server.pid`.
+  - Automatically closes any orphaned dedicated console windows via `taskkill /f /fi "WINDOWTITLE eq Kolam Studio Server*"`.
+- **Batch Script Robustness:**
+  - Formatted in pure 7-bit ASCII with strict Windows CRLF line endings (`\r\n`) to prevent CMD seek-pointer offset misalignments.
+
 
 ---
 
@@ -309,6 +504,41 @@ AK Kolam | அழகான ரங்கோலி கோலம் 🌸 | Easy Ran
 AK Kolam, kolam, rangoli, pulli kolam, shorts
 ```
 
+### 6.3 Structured Vector Stroke Schema (JSON)
+The payload submitted by the Drawing Studio to `/api/generate` matches this schema:
+```json
+{
+  "canvas": {
+    "width": 1080,
+    "height": 1920
+  },
+  "title": "AK Kolam",
+  "dot_grid": "none",
+  "reference_image": "inputs/uploads/abc123_sketch.jpg",
+  "ref_correction": true,
+  "live_aligned": true,
+  "strokes": [
+    {
+      "id": "stroke_1729068000_abcde",
+      "color": "#FFFFFF",
+      "width": 6,
+      "points": [
+        {"x": 540, "y": 480, "t": 0},
+        {"x": 542, "y": 486, "t": 45},
+        {"x": 548, "y": 495, "t": 90}
+      ]
+    }
+  ]
+}
+```
+- `canvas.width` / `canvas.height`: Fixed logical resolution (1080x1920).
+- `dot_grid`: `"none"`, `"8x2"`, or `"6x2"`.
+- `reference_image`: Optional filename of uploaded reference guide stored in `inputs/uploads/`.
+- `ref_correction`: Optional boolean (`true` by default when reference image is present); triggers `reference_alignment.py`.
+- `live_aligned`: Optional boolean (`true` when client-side `ReferenceSnapper` already aligned points in real time; instructs backend to run `refine_live_aligned_strokes` residual refinement instead of full Viterbi deformation).
+- `strokes[].points`: Ordered array of `{x, y, t}` where `x` and `y` are integers ($0 \le x < 1080$, $0 \le y < 1920$) and `t` is elapsed time in milliseconds.
+
+
 ---
 
 ## 7. Operational Guidelines for Future AI Agents
@@ -336,6 +566,9 @@ When interacting with or extending this codebase, all AI agents **must strictly 
    - Video titles **must never exceed 100 characters** (enforced by `smart_trim_title`).
    - Video tags **must never exceed 450 total characters** when joined.
 
+7. **Preserve Generated Video UI:**
+   - Do not redesign or alter the existing generated video UI, badges, branding, or wood background. The Interactive Drawing Studio is an isolated workflow and must not alter the appearance of final rendered videos.
+
 ---
 
 ## 8. Troubleshooting & Common Pitfalls
@@ -347,6 +580,7 @@ When interacting with or extending this codebase, all AI agents **must strictly 
 | Thumbnail custom upload fails with HTTP 403 | YouTube channel is not phone-verified for custom thumbnails | Normal YouTube policy for new accounts. Video still publishes successfully; thumbnail is already baked into opening video frames as a teaser. |
 | Rendering is unusually slow (< 5 FPS) | FFmpeg failed to initialize NVENC and fell back to CPU `cv2.VideoWriter` | Run `nvidia-smi` to ensure GPU is accessible; check that FFmpeg in PATH supports `h264_nvenc`. |
 | Audio track is trimmed or video ends abruptly | `-shortest` flag passed to FFmpeg | Ensure `-stream_loop -1` is used for audio and `-t <duration>` is set strictly to the video length. |
+| Phone / tablet cannot reach Studio URL on LAN | Windows Defender Firewall blocking port 8000 on private profile | Run `New-NetFirewallRule -DisplayName "Kolam Studio Port 8000" -Direction Inbound -LocalPort 8000 -Protocol TCP -Action Allow -Profile Private`. |
 
 ---
 
@@ -361,6 +595,31 @@ python -c "import cv2, torch; print('OpenCV:', cv2.__version__, '| CUDA Availabl
 # 2. Test FFmpeg NVENC Availability
 ffmpeg -f lavfi -i testsrc=size=1080x1920:rate=25 -vcodec h264_nvenc -t 1 -f null -
 
-# 3. Run a Fast End-to-End Test Video Generation
+# 3. Run Reference-Guided Stroke Alignment Tests
+python -m unittest tests/test_reference_alignment.py
+
+# 4. Run End-to-End Alignment GPU NVENC Video Rendering Test
+python -m unittest tests/test_end_to_end_alignment_render.py
+
+# 5. Run Live Reference Snapping Backend Tests
+python -m unittest tests/test_live_snapping.py
+
+# 6. Run Browser Real-Time Reference Snapping Tests (Node.js Test Suite)
+node tests/test_browser_snapping.js
+
+# 7. Run the Entire Automated Test Suite (30 Unit & Regression Tests)
+python -m unittest discover tests
+
+# 8. Run a Fast End-to-End Test Video Generation (CLI Workflow)
 python generate.py --input "inputs/77d590840016a86bc06d5770114539a4-sketch (1).jpg" --type mandala --no-upload
+
+# 9. Start the Production Interactive Drawing Studio (Auto LAN Discovery & Browser Open)
+cmd /c start.bat
+# Or run on custom port without opening browser: cmd /c "start.bat 8080 --no-browser"
+# Or run in foreground inside current terminal: cmd /c "start.bat --foreground --no-browser"
+
+# 10. Stop the Drawing Studio Server Cleanly (Recursive Process Tree & Port Release)
+cmd /c stop.bat
+# Or stop a custom port instance: cmd /c "stop.bat 8080"
 ```
+
