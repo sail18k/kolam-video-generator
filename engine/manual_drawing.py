@@ -48,6 +48,8 @@ def validate_and_normalize_drawing_payload(payload: Dict[str, Any]) -> Dict[str,
     canvas_h = int(canvas_info.get("height", 1920)) if isinstance(canvas_info, dict) else 1920
     
     normalized_strokes = []
+    seen_ids = set()
+    seen_signatures = set()
     
     for s_idx, stroke in enumerate(strokes_raw):
         if not isinstance(stroke, dict):
@@ -93,6 +95,21 @@ def validate_and_normalize_drawing_payload(payload: Dict[str, Any]) -> Dict[str,
         if not cleaned_points:
             continue
             
+        # Deduplicate accidental duplicate stroke objects in payload:
+        # 1. By unique stroke ID (if present and non-empty)
+        stroke_id = str(stroke.get("id", "")).strip()
+        if stroke_id and stroke_id in seen_ids:
+            continue
+            
+        # 2. By exact coordinate and timestamp signature (prevents identical double submission)
+        sig = tuple((p["x"], p["y"], round(p["t"], 1)) for p in cleaned_points)
+        if sig in seen_signatures:
+            continue
+            
+        if stroke_id:
+            seen_ids.add(stroke_id)
+        seen_signatures.add(sig)
+            
         # If single isolated point (tap / dot), add tiny segment so it renders visibly
         if len(cleaned_points) == 1:
             p0 = cleaned_points[0]
@@ -100,7 +117,7 @@ def validate_and_normalize_drawing_payload(payload: Dict[str, Any]) -> Dict[str,
             cleaned_points.append({"x": offset_x, "y": p0["y"], "t": p0["t"] + 10})
             
         normalized_strokes.append({
-            "id": stroke.get("id", f"stroke_{s_idx+1}"),
+            "id": stroke_id or f"stroke_{len(normalized_strokes)+1}",
             "color_bgr": color_bgr,
             "width": width,
             "points": cleaned_points
@@ -127,6 +144,7 @@ def strokes_to_renderer_path(
     """
     Converts strokes into an ordered sequence of 2D coordinates with `None` delimiters,
     interpolating line segments to ensure continuous smooth pen trajectories.
+    Eliminates zero-length segments and redundant duplicate points.
     Returns: (path, point_colors, point_widths)
     """
     path: List[Optional[Tuple[int, int]]] = []
@@ -134,34 +152,42 @@ def strokes_to_renderer_path(
     point_widths: List[Optional[int]] = []
     
     for s_idx, stroke in enumerate(normalized_strokes):
-        pts = stroke["points"]
-        color = stroke["color_bgr"]
-        width = stroke["width"]
+        pts = stroke.get("points", [])
+        if not pts:
+            continue
+        color = stroke.get("color_bgr", (255, 255, 255))
+        width = stroke.get("width", 6)
         
-        if s_idx > 0 and path and path[-1] is not None:
-            # Pen-up delimiter between strokes
+        # Pen-up delimiter between independent strokes
+        if path and path[-1] is not None:
             path.append(None)
             point_colors.append(None)
             point_widths.append(None)
             
         for i in range(len(pts)):
-            curr_pt = (pts[i]["x"], pts[i]["y"])
+            curr_pt = (int(pts[i]["x"]), int(pts[i]["y"]))
             
             if i == 0:
-                path.append(curr_pt)
-                point_colors.append(color)
-                point_widths.append(width)
+                if not path or path[-1] is None or path[-1] != curr_pt:
+                    path.append(curr_pt)
+                    point_colors.append(color)
+                    point_widths.append(width)
             else:
-                prev_pt = (pts[i-1]["x"], pts[i-1]["y"])
+                prev_pt = (int(pts[i-1]["x"]), int(pts[i-1]["y"]))
                 dx = curr_pt[0] - prev_pt[0]
                 dy = curr_pt[1] - prev_pt[1]
                 dist = math.hypot(dx, dy)
                 
+                # Zero-length step: skip redundant duplicate
+                if dist < 0.5:
+                    continue
+                
                 # Strict Blueprint Tracing: never interpolate across large gaps or blocked intervals!
                 if dist > 40.0:
-                    path.append(None)
-                    point_colors.append(None)
-                    point_widths.append(None)
+                    if path and path[-1] is not None:
+                        path.append(None)
+                        point_colors.append(None)
+                        point_widths.append(None)
                     path.append(curr_pt)
                     point_colors.append(color)
                     point_widths.append(width)
@@ -173,13 +199,22 @@ def strokes_to_renderer_path(
                         iy = int(round(prev_pt[1] + dy * frac))
                         ix = max(0, min(ix, 1079))
                         iy = max(0, min(iy, 1919))
-                        path.append((ix, iy))
+                        cand = (ix, iy)
+                        if not path or path[-1] is None or path[-1] != cand:
+                            path.append(cand)
+                            point_colors.append(color)
+                            point_widths.append(width)
+                else:
+                    if not path or path[-1] is None or path[-1] != curr_pt:
+                        path.append(curr_pt)
                         point_colors.append(color)
                         point_widths.append(width)
-                else:
-                    path.append(curr_pt)
-                    point_colors.append(color)
-                    point_widths.append(width)
+                        
+    # Strip trailing None delimiters
+    while path and path[-1] is None:
+        path.pop()
+        point_colors.pop()
+        point_widths.pop()
                     
     return path, point_colors, point_widths
 

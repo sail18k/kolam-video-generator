@@ -29,6 +29,7 @@ echo [NETWORK DISCOVERY]
 echo   💻 Host Access:        http://localhost:8000
 echo                          http://127.0.0.1:8000
 echo   📱 LAN / Wi-Fi Access: http://%LAN_IP%:8000
+echo   ⚡ Drawing Speed:      1.2x (smooth natural hand)
 echo.
 echo ========================================================================
 echo   💡 HOW TO USE ON PHONE OR TABLET:
@@ -42,10 +43,13 @@ echo      New-NetFirewallRule -DisplayName "Kolam Studio Port 8000" -Direction I
 echo ========================================================================
 echo.
 
+set PYTHONUTF8=1
+set PYTHONIOENCODING=utf-8
+
 :: Automatically open default browser on host PC after 2 seconds in background
 start "" cmd /c "timeout /t 2 /nobreak >nul & start http://localhost:8000"
 
 :: Launch web application server
-python web_app.py --host 0.0.0.0 --port 8000
+python web_app.py --host 0.0.0.0 --port 8000 --drawing-speed 1.2
 
 pause

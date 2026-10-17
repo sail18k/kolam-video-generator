@@ -150,6 +150,7 @@ def merge_instrumental_bgm(
         "-c:a", "aac",
         "-b:a", "192k",
         "-t", str(duration),
+        "-movflags", "+faststart",
         temp_output
     ]
 

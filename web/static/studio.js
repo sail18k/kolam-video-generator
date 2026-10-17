@@ -514,7 +514,14 @@
                 const total = pts.length;
 
                 if (toIdx !== fromIdx && Math.abs(toIdx - fromIdx) > 1) {
-                    const step = (toIdx > fromIdx) ? 1 : -1;
+                    let step = (toIdx > fromIdx) ? 1 : -1;
+                    if (activePath.isClosed && total > 2) {
+                        const directDist = Math.abs(toIdx - fromIdx);
+                        const wrapDist = total - directDist;
+                        if (wrapDist < directDist) {
+                            step = (toIdx > fromIdx) ? -1 : 1;
+                        }
+                    }
                     let curr = fromIdx + step;
                     let count = 0;
                     while (curr !== toIdx && count < 8) {
@@ -523,6 +530,7 @@
                         } else if (curr >= total) {
                             if (activePath.isClosed) curr = 0; else break;
                         }
+                        if (curr === toIdx) break;
                         intermediatePoints.push({ x: Math.round(pts[curr][0]), y: Math.round(pts[curr][1]) });
                         curr += step;
                         count++;
@@ -531,7 +539,9 @@
             }
 
             const targetPt = { x: Math.round(bestCand.x), y: Math.round(bestCand.y) };
-            intermediatePoints.push(targetPt);
+            if (!this.lastSnappedPoint || targetPt.x !== this.lastSnappedPoint.x || targetPt.y !== this.lastSnappedPoint.y) {
+                intermediatePoints.push(targetPt);
+            }
 
             // Advance state
             this.activePathId = bestCand.pathId;
@@ -712,8 +722,11 @@
 
             for (let i = 0; i < newPts.length; i++) {
                 const p = newPts[i];
-                pts.push({ x: p.x, y: p.y, t: relTime });
-                ctx.lineTo(p.x, p.y);
+                const prev = pts[pts.length - 1];
+                if (!prev || prev.x !== p.x || prev.y !== p.y) {
+                    pts.push({ x: p.x, y: p.y, t: relTime });
+                    ctx.lineTo(p.x, p.y);
+                }
             }
 
             ctx.stroke();
@@ -792,6 +805,14 @@
             if (action.type === 'erase') {
                 strokes.push(...action.strokes);
                 redoStack.push(action);
+            } else if (action.type === 'stroke') {
+                const idx = strokes.findIndex(s => s.id === action.stroke.id);
+                if (idx !== -1) {
+                    strokes.splice(idx, 1);
+                } else {
+                    strokes.pop();
+                }
+                redoStack.push(action);
             }
         } else if (strokes.length > 0) {
             const popped = strokes.pop();
@@ -804,7 +825,10 @@
         if (redoStack.length === 0) return;
         const action = redoStack.pop();
         if (action.type === 'stroke') {
-            strokes.push(action.stroke);
+            if (!strokes.some(s => s.id === action.stroke.id)) {
+                strokes.push(action.stroke);
+            }
+            undoStack.push(action);
         } else if (action.type === 'erase') {
             const idsToRemove = new Set(action.strokes.map(s => s.id));
             strokes = strokes.filter(s => !idsToRemove.has(s.id));
@@ -1019,10 +1043,13 @@
 
     // --- Video Generation & Job Polling ---
     btnGenerate.addEventListener('click', async () => {
+        if (btnGenerate.disabled) return;
         if (strokes.length === 0) {
             alert('Please draw something on the canvas before generating a video!');
             return;
         }
+
+        btnGenerate.disabled = true;
 
         const payload = {
             canvas: { width: 1080, height: 1920 },
@@ -1031,7 +1058,8 @@
             strokes: strokes,
             reference_image: currentReferenceFilename,
             correction_enabled: refCorrectionToggle ? refCorrectionToggle.checked : true,
-            live_aligned: Boolean(ReferenceSnapper.hasGeometry() && (refCorrectionToggle ? refCorrectionToggle.checked : true))
+            live_aligned: Boolean(ReferenceSnapper.hasGeometry() && (refCorrectionToggle ? refCorrectionToggle.checked : true)),
+            drawing_speed: 1.2
         };
 
         jobModal.style.display = 'flex';
@@ -1049,12 +1077,14 @@
             });
             const data = await res.json();
             if (!data.success) {
+                btnGenerate.disabled = false;
                 showError(data.error || 'Failed to submit generation job.');
                 return;
             }
 
             pollJob(data.job_id);
         } catch (err) {
+            btnGenerate.disabled = false;
             showError(`Network error: ${err.message}`);
         }
     });
@@ -1100,6 +1130,7 @@
     }
 
     function showComplete(job) {
+        btnGenerate.disabled = false;
         modalProgressView.style.display = 'none';
         modalCompleteView.style.display = 'block';
         modalCloseBtn.style.display = 'block';
@@ -1126,6 +1157,7 @@
     }
 
     function showError(errText) {
+        btnGenerate.disabled = false;
         modalProgressView.style.display = 'none';
         modalCompleteView.style.display = 'none';
         modalErrorView.style.display = 'block';
@@ -1134,16 +1166,19 @@
     }
 
     modalCloseBtn.addEventListener('click', () => {
+        btnGenerate.disabled = false;
         jobModal.style.display = 'none';
         if (resultVideo) resultVideo.pause();
     });
 
     btnContinueDrawing.addEventListener('click', () => {
+        btnGenerate.disabled = false;
         jobModal.style.display = 'none';
         if (resultVideo) resultVideo.pause();
     });
 
     btnDismissError.addEventListener('click', () => {
+        btnGenerate.disabled = false;
         jobModal.style.display = 'none';
     });
 })();

@@ -24,7 +24,7 @@ from engine.path_generator import generate_path_for_type
 from engine.renderer import render_kolam_video
 from engine.thumbnail_generator import generate_kolam_thumbnail
 from engine.seo_generator import generate_dynamic_seo_metadata, save_metadata_to_file
-from engine.audio_processor import merge_instrumental_bgm
+from engine.audio_processor import merge_instrumental_bgm, get_video_duration
 
 def main():
     parser = argparse.ArgumentParser(description="Headless Kolam Video Generator - YouTube Shorts Ready")
@@ -33,6 +33,7 @@ def main():
     parser.add_argument("--type", "-t", default="auto", choices=["auto","pulli_kolam","sikku_kolam","rangoli","mandala"], help="Kolam type, auto detects")
     parser.add_argument("--grid", "-g", default="8x2", help="Dot grid: 8x2, 6x2, etc")
     parser.add_argument("--fps", type=int, default=25, help="FPS (25 for YouTube Shorts)")
+    parser.add_argument("--drawing-speed", type=float, default=1.2, help="Drawing speed multiplier (default: 1.2)")
     parser.add_argument("--no-hand", action="store_true", help="Disable hand overlay")
     parser.add_argument("--no-watermark", action="store_true", help="Disable footer watermark (Like, Share, Subscribe)")
     parser.add_argument("--no-thumbnail", action="store_true", help="Disable YouTube Short thumbnail generation")
@@ -125,7 +126,8 @@ def main():
         fps=args.fps,
         show_watermark=not args.no_watermark,
         title=args.title,
-        cover_image_path=thumbnail_path
+        cover_image_path=thumbnail_path,
+        drawing_speed=args.drawing_speed
     )
     
     # 6. Merge Vocal-Removed Instrumental Background Music
@@ -146,7 +148,8 @@ def main():
     # 7. Dynamic Bilingual SEO Metadata Suggestion (Tamil + English)
     print("\n[7/7] Generating Dynamic High-Engagement SEO Metadata (Tamil + English)...")
     valid_points = [p for p in path if p is not None] if path else []
-    duration_sec = max(15, int(len(valid_points) / 15 / max(1, args.fps)))
+    probed_dur = get_video_duration(output)
+    duration_sec = max(15, int(round(probed_dur))) if probed_dur > 0 else max(15, int(len(valid_points) / 15 / max(1, args.fps)))
     
     metadata = generate_dynamic_seo_metadata(
         image_path=args.input,

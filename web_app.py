@@ -50,7 +50,7 @@ from engine.reference_alignment import (
 from engine.dot_generator import generate_custom_dots
 from engine.renderer import render_kolam_video
 from engine.thumbnail_generator import generate_kolam_thumbnail
-from engine.audio_processor import merge_instrumental_bgm
+from engine.audio_processor import merge_instrumental_bgm, get_video_duration
 from engine.seo_generator import generate_dynamic_seo_metadata, save_metadata_to_file
 
 # Initialize Flask application
@@ -224,7 +224,8 @@ def background_job_worker():
                 cover_image_path=thumbnail_generated,
                 point_colors=point_colors,
                 point_widths=point_widths,
-                progress_callback=on_render_progress
+                progress_callback=on_render_progress,
+                drawing_speed=float(payload.get("drawing_speed", 1.2))
             )
             
             # 6. Audio Processing (Vocal Removal + BGM Muxing)
@@ -244,8 +245,8 @@ def background_job_worker():
                 job["stage"] = "Generating SEO metadata"
                 job["progress"] = 95
                 
-            valid_points = [p for p in path if p is not None]
-            duration_sec = max(15, int(len(valid_points) / 5 / 25))
+            probed_dur = get_video_duration(video_path)
+            duration_sec = max(15, int(round(probed_dur))) if probed_dur > 0 else max(15, int(len([p for p in path if p is not None]) / 2.5 / 25))
             
             meta_dict = generate_dynamic_seo_metadata(
                 image_path=None,
@@ -460,10 +461,11 @@ def get_job_thumbnail(job_id: str):
     return send_file(str(target), mimetype="image/jpeg", as_attachment=False)
 
 
-def run_server(host: str = "0.0.0.0", port: int = 8000):
+def run_server(host: str = "0.0.0.0", port: int = 8000, drawing_speed: float = 1.2):
     """Prints network URLs and launches the web server."""
     lan_ip = get_lan_ip()
     app.config["PORT"] = port
+    app.config["DRAWING_SPEED"] = drawing_speed
     
     print("\n" + "=" * 68)
     print(" 🎨  KOLAM VIDEO GENERATOR V2 - INTERACTIVE DRAWING STUDIO")
@@ -471,6 +473,7 @@ def run_server(host: str = "0.0.0.0", port: int = 8000):
     print(f" 💻  Local Host Access:      http://localhost:{port}")
     print(f"                            http://127.0.0.1:{port}")
     print(f" 📱  LAN / Wi-Fi Access:     http://{lan_ip}:{port}")
+    print(f" ⚡  Drawing Speed:          {drawing_speed}x (smooth natural hand)")
     print("=" * 68)
     print(" 💡  Connect any smartphone, tablet, or laptop on your local Wi-Fi")
     print(f"     by opening: http://{lan_ip}:{port}")
@@ -485,5 +488,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Start Kolam Interactive Drawing Studio")
     parser.add_argument("--host", default="0.0.0.0", help="Host interface (default: 0.0.0.0 for LAN)")
     parser.add_argument("--port", type=int, default=8000, help="Port (default: 8000)")
+    parser.add_argument("--drawing-speed", type=float, default=1.2, help="Default drawing speed multiplier (default: 1.2)")
     args = parser.parse_args()
-    run_server(host=args.host, port=args.port)
+    run_server(host=args.host, port=args.port, drawing_speed=args.drawing_speed)

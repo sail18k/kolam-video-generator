@@ -277,8 +277,8 @@ def overlay_hand(background, hand_img, pen_tip_pos, angle_offset=0):
     
     return background
 
-def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, line_thickness=6, show_watermark=True, title="AK Kolam", cover_image_path=None, point_colors=None, point_widths=None, progress_callback=None):
-    """Headless renderer - exact replica of reference video"""
+def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, line_thickness=6, show_watermark=True, title="AK Kolam", cover_image_path=None, point_colors=None, point_widths=None, progress_callback=None, drawing_speed: float = 1.2):
+    """Headless renderer - exact replica of reference video with smooth continuous drawing and speed control"""
     width, height = 1080, 1920
     
     # Prepare header title (AK Kolam) and footer watermark (Subscribe, Like, Share)
@@ -316,6 +316,7 @@ def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, li
         '-preset', 'p6',
         '-b:v', '8M',
         '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart',
         output_path
     ]
     
@@ -329,6 +330,19 @@ def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, li
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
     
+    # Helper to safely write frames to FFmpeg or OpenCV
+    frame_count = 0
+    def write_frame_to_output(f_img):
+        nonlocal frame_count
+        if use_ffmpeg:
+            try:
+                process.stdin.write(f_img.tobytes())
+            except (BrokenPipeError, OSError):
+                pass
+        else:
+            out.write(f_img)
+        frame_count += 1
+    
     # Create base frame with dots
     base = wood.copy()
     for x,y in dots:
@@ -336,8 +350,6 @@ def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, li
     
     # Drawing canvas
     canvas = base.copy()
-    
-    frame_count = 0
 
     # Write cover teaser frames if provided (ensures YouTube Shorts displays thumbnail cover)
     if cover_image_path and os.path.exists(cover_image_path):
@@ -350,107 +362,252 @@ def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, li
                     # 3-frame quick cross-fade to blank drawing floor
                     alpha = (cover_frames - 1 - c_idx) / 3.0
                     blend = cv2.addWeighted(cover, alpha, canvas, 1.0 - alpha, 0)
-                    if use_ffmpeg:
-                        process.stdin.write(blend.tobytes())
-                    else:
-                        out.write(blend)
+                    write_frame_to_output(blend)
                 else:
-                    if use_ffmpeg:
-                        process.stdin.write(cover.tobytes())
-                    else:
-                        out.write(cover)
-                frame_count += 1
+                    write_frame_to_output(cover)
     
-    # For smooth drawing, dynamically set frames based on path length
-    total_points = len(path)
-    # Draw at a constant speed (e.g., 5 points per frame)
+    # Decompose path into continuous strokes separated by None delimiters
+    strokes = []
+    curr_pts = []
+    curr_colors = []
+    curr_widths = []
+
+    for idx, pt in enumerate(path):
+        if pt is None:
+            if curr_pts:
+                strokes.append({
+                    'points': curr_pts,
+                    'colors': curr_colors,
+                    'widths': curr_widths
+                })
+                curr_pts = []
+                curr_colors = []
+                curr_widths = []
+        else:
+            curr_pts.append(pt)
+            c = point_colors[idx] if point_colors and idx < len(point_colors) else None
+            w = point_widths[idx] if point_widths and idx < len(point_widths) else None
+            curr_colors.append(c)
+            curr_widths.append(w)
+
+    if curr_pts:
+        strokes.append({
+            'points': curr_pts,
+            'colors': curr_colors,
+            'widths': curr_widths
+        })
+
+    # Compute Euclidean lengths and cumulative distance for each stroke
+    for s in strokes:
+        pts = s['points']
+        n = len(pts)
+        cum_dist = [0.0]
+        total_d = 0.0
+        for i in range(1, n):
+            dx = float(pts[i][0] - pts[i-1][0])
+            dy = float(pts[i][1] - pts[i-1][1])
+            d = (dx * dx + dy * dy) ** 0.5
+            total_d += d
+            cum_dist.append(total_d)
+        s['cum_dist'] = cum_dist
+        s['length'] = total_d
+
+    total_path_length = sum(s['length'] for s in strokes)
+    total_points = sum(len(s['points']) for s in strokes)
+
+    # Calculate frame allocation scaled by drawing_speed
     points_per_frame = 5
-    target_frames = max(100, total_points // points_per_frame)
-    
-    frame_count = 0
-    last_idx = 0
-    
-    # Draw progressively
-    for frame_idx in range(target_frames):
-        # Calculate how many points to draw in this frame
-        current_idx = min(int((frame_idx + 1) * total_points / target_frames), total_points)
-        
-        # Draw the segments for this frame
-        for i in range(last_idx, current_idx):
-            if i > 0:
-                p1 = path[i-1]
-                p2 = path[i]
-                if p1 is not None and p2 is not None:
-                    color = point_colors[i] if point_colors and i < len(point_colors) and point_colors[i] is not None else (255, 255, 255)
-                    thickness = point_widths[i] if point_widths and i < len(point_widths) and point_widths[i] is not None else line_thickness
-                    cv2.line(canvas, p1, p2, color, thickness, lineType=cv2.LINE_AA)
-                
-        # Write frame if we advanced the point
-        if current_idx > 0:
-            frame = canvas.copy()
-            tip_pos = path[current_idx - 1]
-            if tip_pos is None:
-                # Fallback to the last valid position
-                for k in range(current_idx - 1, -1, -1):
-                    if path[k] is not None:
-                        tip_pos = path[k]
-                        break
+    base_frames = max(80, int(round(total_points / points_per_frame))) if total_points > 0 else 80
+    eff_speed = max(0.01, float(drawing_speed))
+    target_draw_frames = max(40, int(round(base_frames / eff_speed)))
+
+    # Compute transition frame counts between independent strokes
+    trans_frames = []
+    for k in range(len(strokes) - 1):
+        p_end = strokes[k]['points'][-1]
+        p_next = strokes[k+1]['points'][0]
+        gap_dist = ((p_next[0] - p_end[0])**2 + (p_next[1] - p_end[1])**2) ** 0.5
+        t_f = max(2, min(8, int(gap_dist / 60.0)))
+        trans_frames.append(t_f)
+    total_trans_frames = sum(trans_frames)
+
+    # Allocate drawing frames proportionally to stroke arc lengths
+    if strokes:
+        available_draw_frames = max(len(strokes) * 2, target_draw_frames - total_trans_frames)
+        stroke_frames = []
+        if total_path_length > 1e-3:
+            for s in strokes:
+                frac = s['length'] / total_path_length
+                f_count = max(2, int(round(available_draw_frames * frac)))
+                stroke_frames.append(f_count)
+        else:
+            f_each = max(2, available_draw_frames // len(strokes))
+            stroke_frames = [f_each] * len(strokes)
             
-            # Overlay hand at current tip
-            if tip_pos is not None:
+        diff = available_draw_frames - sum(stroke_frames)
+        if diff != 0 and stroke_frames:
+            max_idx = int(np.argmax(stroke_frames))
+            stroke_frames[max_idx] = max(2, stroke_frames[max_idx] + diff)
+    else:
+        stroke_frames = []
+
+    total_anim_frames = sum(stroke_frames) + total_trans_frames
+    anim_frame_idx = 0
+
+    # Draw progressively with sub-segment continuous interpolation
+    for k, s in enumerate(strokes):
+        pts = s['points']
+        colors = s['colors']
+        widths = s['widths']
+        cum_dist = s['cum_dist']
+        stroke_len = s['length']
+        n_pts = len(pts)
+        n_frames = stroke_frames[k]
+        
+        last_rendered_dist = 0.0
+        last_rendered_pt = pts[0]
+        last_rendered_idx = 0
+        
+        if n_pts == 1 or stroke_len < 1e-4:
+            # Single-point dot stroke or zero-length stroke
+            c = colors[0] if colors[0] is not None else (255, 255, 255)
+            w = widths[0] if widths[0] is not None else line_thickness
+            cv2.circle(canvas, pts[0], max(1, w // 2), c, -1, lineType=cv2.LINE_AA)
+            for f in range(n_frames):
+                tip_pos = pts[0]
+                frame = canvas.copy()
                 if hand_img is not None:
                     frame = overlay_hand(frame, hand_img, tip_pos)
                 else:
-                    # Draw small pen indicator if no hand
                     cv2.circle(frame, tip_pos, 8, (255, 200, 200), -1)
-            
-            # Apply header title (AK Kolam) and footer watermark (Like, Share, Subscribe)
-            if header_data is not None:
-                fade = min(1.0, (frame_count + 1) / 15.0) if frame_count < 15 else 1.0
-                frame = apply_footer_watermark(frame, header_data, opacity=fade)
-            
-            if watermark_data is not None:
-                fade = min(1.0, (frame_count + 1) / 15.0) if frame_count < 15 else 1.0
-                frame = apply_footer_watermark(frame, watermark_data, opacity=fade)
-            
-            if use_ffmpeg:
-                process.stdin.write(frame.tobytes())
-            else:
-                out.write(frame)
-            frame_count += 1
-            
-        # Print progress every 5%
-        if frame_idx % max(1, target_frames // 20) == 0 or frame_idx == target_frames - 1:
-            progress = (frame_idx + 1) / target_frames * 100
-            import sys
-            sys.stdout.write(f"\r  -> Rendering progress: {progress:.1f}% ({frame_idx+1}/{target_frames} frames)")
-            sys.stdout.flush()
-            if progress_callback:
-                try:
-                    progress_callback(progress, frame_idx + 1, target_frames)
-                except Exception:
-                    pass
-            
-        last_idx = current_idx
-        if current_idx >= total_points:
-            break
-    
+                if header_data is not None:
+                    frame = apply_footer_watermark(frame, header_data, opacity=1.0)
+                if watermark_data is not None:
+                    frame = apply_footer_watermark(frame, watermark_data, opacity=1.0)
+                write_frame_to_output(frame)
+                anim_frame_idx += 1
+                if progress_callback and total_anim_frames > 0:
+                    prog = (anim_frame_idx / total_anim_frames) * 100.0
+                    progress_callback(prog, anim_frame_idx, total_anim_frames)
+        else:
+            for f in range(n_frames):
+                if f == n_frames - 1:
+                    target_dist = stroke_len
+                else:
+                    target_dist = ((f + 1) / float(n_frames)) * stroke_len
+                
+                # Advance from last_rendered_dist to target_dist
+                target_i = 1
+                while target_i < n_pts - 1 and cum_dist[target_i] < target_dist:
+                    target_i += 1
+                
+                # Draw intermediate vertices
+                for j in range(last_rendered_idx + 1, target_i):
+                    c = colors[j] if colors[j] is not None else (255, 255, 255)
+                    w = widths[j] if widths[j] is not None else line_thickness
+                    cv2.line(canvas, last_rendered_pt, pts[j], c, w, lineType=cv2.LINE_AA)
+                    last_rendered_pt = pts[j]
+                    last_rendered_idx = j
+                
+                # Interpolate along active segment
+                seg_d0 = cum_dist[target_i - 1]
+                seg_d1 = cum_dist[target_i]
+                seg_len = seg_d1 - seg_d0
+                
+                if f == n_frames - 1:
+                    curr_pt = pts[-1]
+                elif seg_len > 1e-6:
+                    alpha = (target_dist - seg_d0) / seg_len
+                    alpha = max(0.0, min(1.0, alpha))
+                    cx = int(round((1.0 - alpha) * pts[target_i - 1][0] + alpha * pts[target_i][0]))
+                    cy = int(round((1.0 - alpha) * pts[target_i - 1][1] + alpha * pts[target_i][1]))
+                    curr_pt = (cx, cy)
+                else:
+                    curr_pt = pts[target_i]
+                
+                if curr_pt != last_rendered_pt:
+                    c = colors[target_i] if colors[target_i] is not None else (255, 255, 255)
+                    w = widths[target_i] if widths[target_i] is not None else line_thickness
+                    cv2.line(canvas, last_rendered_pt, curr_pt, c, w, lineType=cv2.LINE_AA)
+                    last_rendered_pt = curr_pt
+                
+                last_rendered_idx = target_i - 1
+                last_rendered_dist = target_dist
+                tip_pos = curr_pt
+                
+                frame = canvas.copy()
+                if hand_img is not None:
+                    frame = overlay_hand(frame, hand_img, tip_pos)
+                else:
+                    cv2.circle(frame, tip_pos, 8, (255, 200, 200), -1)
+                
+                if header_data is not None:
+                    fade = min(1.0, (frame_count + 1) / 15.0) if frame_count < 15 else 1.0
+                    frame = apply_footer_watermark(frame, header_data, opacity=fade)
+                if watermark_data is not None:
+                    fade = min(1.0, (frame_count + 1) / 15.0) if frame_count < 15 else 1.0
+                    frame = apply_footer_watermark(frame, watermark_data, opacity=fade)
+                
+                write_frame_to_output(frame)
+                anim_frame_idx += 1
+                
+                if total_anim_frames > 0 and (anim_frame_idx % max(1, total_anim_frames // 20) == 0 or anim_frame_idx == total_anim_frames):
+                    prog = (anim_frame_idx / total_anim_frames) * 100.0
+                    import sys
+                    sys.stdout.write(f"\r  -> Rendering progress: {prog:.1f}% ({anim_frame_idx}/{total_anim_frames} frames)")
+                    sys.stdout.flush()
+                    if progress_callback:
+                        try:
+                            progress_callback(prog, anim_frame_idx, total_anim_frames)
+                        except Exception:
+                            pass
+        
+        # Stroke finished: smooth pen-up repositioning transition across gap to next stroke
+        if k < len(strokes) - 1:
+            next_start = strokes[k+1]['points'][0]
+            curr_tip = strokes[k]['points'][-1]
+            n_trans = trans_frames[k]
+            for tf in range(n_trans):
+                tau = float(tf + 1) / float(n_trans + 1)
+                ease = tau * tau * (3.0 - 2.0 * tau)
+                tx = int(round((1.0 - ease) * curr_tip[0] + ease * next_start[0]))
+                ty = int(round((1.0 - ease) * curr_tip[1] + ease * next_start[1]))
+                trans_tip = (tx, ty)
+                
+                # Canvas untouched during pen-up transition
+                frame = canvas.copy()
+                if hand_img is not None:
+                    frame = overlay_hand(frame, hand_img, trans_tip)
+                else:
+                    cv2.circle(frame, trans_tip, 8, (255, 200, 200), -1)
+                
+                if header_data is not None:
+                    frame = apply_footer_watermark(frame, header_data, opacity=1.0)
+                if watermark_data is not None:
+                    frame = apply_footer_watermark(frame, watermark_data, opacity=1.0)
+                
+                write_frame_to_output(frame)
+                anim_frame_idx += 1
+                if progress_callback and total_anim_frames > 0:
+                    prog = (anim_frame_idx / total_anim_frames) * 100.0
+                    progress_callback(prog, anim_frame_idx, total_anim_frames)
+
     # Hold final frame for 1 second (25 frames)
     final_frame = canvas.copy()
     if header_data is not None:
         final_frame = apply_footer_watermark(final_frame, header_data, opacity=1.0)
     if watermark_data is not None:
         final_frame = apply_footer_watermark(final_frame, watermark_data, opacity=1.0)
+    for _ in range(fps):
+        write_frame_to_output(final_frame)
+    
     if use_ffmpeg:
-        for _ in range(fps):
-            process.stdin.write(final_frame.tobytes())
-            frame_count += 1
-        process.stdin.close()
-        process.wait()
+        try:
+            process.stdin.close()
+            process.wait()
+        except Exception:
+            pass
     else:
-        for _ in range(fps):
-            out.write(final_frame)
-            frame_count += 1
         out.release()
         
     print(f"\nVideo saved: {output_path}, {frame_count} frames, {frame_count/fps:.1f}s")
