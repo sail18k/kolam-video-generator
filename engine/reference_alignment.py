@@ -164,11 +164,24 @@ def extract_skeleton_paths(skeleton: np.ndarray) -> List[ReferencePath]:
         return []
 
     skel_bin = (skeleton > 0).astype(np.uint8)
-    kernel = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=np.uint8)
-    neighbor_count = cv2.filter2D(skel_bin, -1, kernel) * skel_bin
-
     offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
     h, w = skeleton.shape
+    neighbor_count = np.zeros_like(skel_bin, dtype=np.uint8)
+
+    def is_linked(y: int, x: int, dy: int, dx: int) -> bool:
+        ny, nx = y + dy, x + dx
+        if not (0 <= ny < h and 0 <= nx < w and skel_bin[ny, nx]):
+            return False
+        # Suppress a diagonal shortcut when an orthogonal pixel already connects
+        # the same local pixels. This prevents ordinary one-pixel curves from
+        # being mistaken for dense junctions under 8-neighbor counting.
+        if dy and dx and (skel_bin[y + dy, x] or skel_bin[y, x + dx]):
+            return False
+        return True
+
+    for sy, sx in np.column_stack(np.where(skel_bin)):
+        neighbor_count[sy, sx] = sum(1 for dy, dx in offsets if is_linked(int(sy), int(sx), dy, dx))
+
     visited = np.zeros_like(skel_bin, dtype=bool)
     paths: List[ReferencePath] = []
     path_id = 1
@@ -179,7 +192,7 @@ def extract_skeleton_paths(skeleton: np.ndarray) -> List[ReferencePath]:
     for sy, sx in seeds:
         for dy, dx in offsets:
             ny, nx = sy + dy, sx + dx
-            if 0 <= ny < h and 0 <= nx < w and skel_bin[ny, nx] and not visited[ny, nx]:
+            if is_linked(int(sy), int(sx), dy, dx) and not visited[ny, nx]:
                 path = [(float(sx), float(sy))]
                 cy, cx = ny, nx
                 while True:
@@ -191,7 +204,7 @@ def extract_skeleton_paths(skeleton: np.ndarray) -> List[ReferencePath]:
                     next_pt = None
                     for ddy, ddx in offsets:
                         nny, nnx = cy + ddy, cx + ddx
-                        if 0 <= nny < h and 0 <= nnx < w and skel_bin[nny, nnx] and not visited[nny, nnx]:
+                        if is_linked(cy, cx, ddy, ddx) and not visited[nny, nnx]:
                             next_pt = (nnx, nny)
                             break
                     if next_pt is None:
@@ -215,7 +228,7 @@ def extract_skeleton_paths(skeleton: np.ndarray) -> List[ReferencePath]:
             next_pt = None
             for dy, dx in offsets:
                 ny, nx = cy + dy, cx + dx
-                if 0 <= ny < h and 0 <= nx < w and skel_bin[ny, nx] and not visited[ny, nx]:
+                if is_linked(cy, cx, dy, dx) and not visited[ny, nx]:
                     next_pt = (nx, ny)
                     break
             if next_pt is None:
@@ -886,83 +899,164 @@ def refine_live_aligned_strokes(
     Validates and conservatively refines strokes that were already live-aligned
     in the browser in real time:
     - Enforces strict canvas coordinate bounds (0..1079, 0..1919).
-    - Bridges closed-loop endpoints if within gap recovery distance.
-    - Applies gentle temporal moving average smoothing to eliminate discretization jitter.
-    - Preserves all human stroke order, direction, timing, and IDs.
-    - Avoids re-warping or running heavy Viterbi deformation on already-aligned paths.
+    - With a reference, validates the whole trajectory against the centerline and
+      projects accepted submitted points to it; rejected spans become pen-up gaps.
+    - Without a reference, performs bounded legacy cleanup and optional small-loop
+      recovery without smoothing live-aligned points.
+    - Preserves stroke order, direction, timing, and IDs for accepted points.
     """
     cfg = config or CorrectionConfig()
     refined_strokes = []
-    refined_count = 0
+    rejected_samples = 0
+    accepted_distances: List[float] = []
+    max_deviation = 3.0
+
+    if ref_geom is not None and (ref_geom.skel_tree is None or len(ref_geom.skel_points) == 0):
+        raise ValueError("The uploaded blueprint has no usable centerline geometry.")
+
+    def add_runs(stroke: Dict[str, Any], runs: List[List[Dict[str, Any]]]) -> None:
+        for run_idx, points in enumerate(runs):
+            if not points:
+                continue
+            base_id = stroke.get("id", "stroke")
+            out_id = base_id if run_idx == 0 else f"{base_id}_sub{run_idx + 1}"
+            refined_strokes.append({
+                "id": out_id,
+                "color_bgr": stroke.get("color_bgr"),
+                "width": stroke.get("width"),
+                "points": points,
+            })
 
     for stroke in strokes:
         pts = stroke.get("points", [])
-        if len(pts) < 2:
-            refined_strokes.append(stroke)
+        if not pts:
             continue
 
-        # Strict Blueprint Tracing: split stroke if any internal gap exceeds 35px
-        sub_strokes = []
-        curr_sub = [pts[0]]
-        for i in range(1, len(pts)):
-            d = math.hypot(pts[i]["x"] - pts[i-1]["x"], pts[i]["y"] - pts[i-1]["y"])
-            if d > 35.0:
-                if len(curr_sub) >= 2:
-                    sub_strokes.append(curr_sub)
-                curr_sub = [pts[i]]
+        # Pointer jumps always create pen-up boundaries, even if both endpoints happen
+        # to land on valid but disconnected blueprint components.
+        input_runs: List[List[Dict[str, Any]]] = []
+        closed_legacy = False
+        if ref_geom is None and len(pts) >= 6:
+            try:
+                closed_legacy = math.hypot(float(pts[0]["x"]) - float(pts[-1]["x"]), float(pts[0]["y"]) - float(pts[-1]["y"])) <= 20.0
+            except (KeyError, TypeError, ValueError):
+                closed_legacy = False
+        current = list(pts) if closed_legacy else [pts[0]]
+        if not closed_legacy:
+            for prev, point in zip(pts, pts[1:]):
+                try:
+                    distance = math.hypot(float(point["x"]) - float(prev["x"]), float(point["y"]) - float(prev["y"]))
+                except (KeyError, TypeError, ValueError):
+                    distance = float("inf")
+                if distance > 35.0:
+                    if current:
+                        input_runs.append(current)
+                    current = [point]
+                else:
+                    current.append(point)
+        if current:
+            input_runs.append(current)
+
+        if ref_geom is None:
+            # Legacy residual cleanup remains available to callers without a blueprint.
+            # Live-aligned coordinates are already snapped, so do not smooth them.
+            clean_runs = []
+            for run_idx, run in enumerate(input_runs):
+                clean = []
+                for point in run:
+                    try:
+                        x = int(round(np.clip(float(point["x"]), 0.0, 1079.0)))
+                        y = int(round(np.clip(float(point["y"]), 0.0, 1919.0)))
+                        t = float(point.get("t", 0.0))
+                    except (KeyError, TypeError, ValueError, OverflowError):
+                        continue
+                    if not clean or (clean[-1]["x"], clean[-1]["y"]) != (x, y):
+                        clean.append({"x": x, "y": y, "t": t})
+                if cfg.enable_gap_recovery and len(clean) >= 6:
+                    gap = math.hypot(clean[0]["x"] - clean[-1]["x"], clean[0]["y"] - clean[-1]["y"])
+                    if gap <= cfg.max_gap_recovery_distance:
+                        clean[-1]["x"], clean[-1]["y"] = clean[0]["x"], clean[0]["y"]
+                clean_runs.append(clean)
+            add_runs(stroke, clean_runs)
+            continue
+
+        # Strict mode checks every 2px along the submitted trajectory. Accepted
+        # browser points are projected to the centerline, while the validation
+        # samples stay diagnostic-only so existing point counts and timing survive.
+        strict_runs: List[List[Dict[str, Any]]] = []
+        for run in input_runs:
+            active: List[Dict[str, Any]] = []
+
+            def projected(point, nearest_idx):
+                px, py = ref_geom.skel_points[int(nearest_idx)]
+                return {
+                    "x": int(round(np.clip(px, 0.0, 1079.0))),
+                    "y": int(round(np.clip(py, 0.0, 1919.0))),
+                    "t": float(point.get("t", 0.0)),
+                }
+
+            if len(run) == 1:
+                point = run[0]
+                distance, nearest_idx = ref_geom.skel_tree.query([float(point["x"]), float(point["y"])], k=1)
+                if float(distance) <= max_deviation:
+                    accepted_distances.append(float(distance))
+                    strict_runs.append([projected(point, nearest_idx)])
+                else:
+                    rejected_samples += 1
+                continue
+
+            first = run[0]
+            first_distance, first_idx = ref_geom.skel_tree.query([float(first["x"]), float(first["y"])], k=1)
+            if float(first_distance) <= max_deviation:
+                accepted_distances.append(float(first_distance))
+                active = [projected(first, first_idx)]
             else:
-                curr_sub.append(pts[i])
-        if len(curr_sub) >= 2:
-            sub_strokes.append(curr_sub)
-        elif not sub_strokes and len(curr_sub) >= 1:
-            sub_strokes.append(curr_sub)
+                rejected_samples += 1
 
-        for sub_idx, sub_pts in enumerate(sub_strokes):
-            pts_arr = np.array([[p["x"], p["y"]] for p in sub_pts], dtype=np.float32)
-            times = [p.get("t", 0.0) for p in sub_pts]
+            for p0, p1 in zip(run, run[1:]):
+                x0, y0 = float(p0["x"]), float(p0["y"])
+                x1, y1 = float(p1["x"]), float(p1["y"])
+                length = math.hypot(x1 - x0, y1 - y0)
+                steps = max(1, int(math.ceil(length / 2.0)))
+                fractions = np.linspace(0.0, 1.0, steps + 1, dtype=np.float32)
+                samples = np.column_stack((x0 + (x1 - x0) * fractions, y0 + (y1 - y0) * fractions)).astype(np.float32)
+                distances, indices = ref_geom.skel_tree.query(samples, k=1)
+                valid_segment = bool(np.all(distances <= max_deviation))
+                if valid_segment:
+                    accepted_distances.extend(float(d) for d in distances)
+                    endpoint = projected(p1, indices[-1])
+                    if not active:
+                        active = [projected(p0, indices[0])]
+                    if (active[-1]["x"], active[-1]["y"]) != (endpoint["x"], endpoint["y"]):
+                        active.append(endpoint)
+                else:
+                    rejected_samples += int(np.count_nonzero(distances > max_deviation))
+                    if len(active) >= 2:
+                        strict_runs.append(active)
+                    active = []
+                    endpoint_distance = float(distances[-1])
+                    if endpoint_distance <= max_deviation:
+                        active = [projected(p1, indices[-1])]
 
-            # 1. Closed loop gap closure if endpoints are close
-            if cfg.enable_gap_recovery and len(pts_arr) >= 6:
-                gap = float(np.linalg.norm(pts_arr[0] - pts_arr[-1]))
-                if gap <= cfg.max_gap_recovery_distance:
-                    pts_arr[-1] = pts_arr[0]
+            if len(active) >= 2:
+                strict_runs.append(active)
 
-            # 2. Gentle Moving Average Smoothing
-            if cfg.enable_smoothing and len(pts_arr) > 6:
-                w_size = cfg.smoothing_window
-                kernel = np.ones(w_size) / float(w_size)
-                pad_size = w_size // 2
-                px = np.pad(pts_arr[:, 0], pad_size, mode="edge")
-                py = np.pad(pts_arr[:, 1], pad_size, mode="edge")
-                sm_x = np.convolve(px, kernel, mode="valid")
-                sm_y = np.convolve(py, kernel, mode="valid")
-                sm_x[0], sm_x[-1] = pts_arr[0, 0], pts_arr[-1, 0]
-                sm_y[0], sm_y[-1] = pts_arr[0, 1], pts_arr[-1, 1]
-                pts_arr = np.column_stack([sm_x, sm_y])
+        # Keep legitimate isolated dots only when they lie on blueprint geometry.
+        add_runs(stroke, strict_runs)
 
-            # 3. Reconstruct points
-            final_points = []
-            for i in range(len(pts_arr)):
-                ix = int(round(np.clip(pts_arr[i, 0], 0.0, 1079.0)))
-                iy = int(round(np.clip(pts_arr[i, 1], 0.0, 1919.0)))
-                it = float(times[min(i, len(times) - 1)])
-                if final_points and final_points[-1]["x"] == ix and final_points[-1]["y"] == iy:
-                    continue
-                final_points.append({"x": ix, "y": iy, "t": it})
+    if ref_geom is not None and not refined_strokes:
+        raise ValueError("No submitted drawing points remain on the uploaded blueprint centerline.")
 
-            sub_id = stroke.get("id", "stroke") if sub_idx == 0 else f"{stroke.get('id', 'stroke')}_sub{sub_idx+1}"
-            refined_strokes.append({
-                "id": sub_id,
-                "color_bgr": stroke.get("color_bgr"),
-                "width": stroke.get("width"),
-                "points": final_points
-            })
-            refined_count += 1
-
+    distances = np.asarray(accepted_distances, dtype=np.float32)
     diag = {
-        "status": "live_aligned_refined",
+        "status": "live_aligned_validated" if ref_geom is not None else "live_aligned_refined",
         "total_strokes": len(strokes),
-        "refined_count": refined_count
+        "refined_count": len(refined_strokes),
+        "rejected_samples": rejected_samples,
+        "geometry_error_mean": float(np.mean(distances)) if len(distances) else 0.0,
+        "geometry_error_p95": float(np.percentile(distances, 95)) if len(distances) else 0.0,
+        "geometry_error_p99": float(np.percentile(distances, 99)) if len(distances) else 0.0,
+        "geometry_error_max": float(np.max(distances)) if len(distances) else 0.0,
     }
     return refined_strokes, diag
 

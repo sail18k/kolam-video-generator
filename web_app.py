@@ -129,29 +129,40 @@ def background_job_worker():
             if ref_filename and correction_enabled:
                 safe_name = secure_filename(os.path.basename(str(ref_filename)))
                 ref_path = UPLOADS_DIR / safe_name
-                if ref_path.exists() and ref_path.is_file():
-                    with jobs_lock:
-                        job["stage"] = "Refining live-aligned strokes" if live_aligned else "Aligning strokes to reference"
-                        job["progress"] = 10
-                    try:
-                        ref_geom = preprocess_reference_image(str(ref_path))
-                        if live_aligned:
-                            # Frontend already snapped in real time; perform conservative residual refinement
-                            corrected, diag = refine_live_aligned_strokes(normalized["strokes"], ref_geom)
-                            aligned_strokes = corrected
-                            print(f"[JOB {job_id}] Live-aligned stroke refinement: {diag.get('refined_count', 0)}/{len(aligned_strokes)} strokes refined.")
-                        else:
-                            # Full backend Viterbi alignment for legacy or CLI payloads
-                            corrected, diag = correct_stroke_sequence(normalized["strokes"], ref_geom)
-                            aligned_strokes = corrected
-                            print(f"[JOB {job_id}] Reference alignment completed: {diag.get('corrected_count', 0)}/{diag.get('total_strokes', 0)} strokes aligned.")
+                if not ref_path.exists() or not ref_path.is_file():
+                    raise ValueError("The selected blueprint reference is missing or invalid. Upload it again before generating.")
+                with jobs_lock:
+                    job["stage"] = "Validating live-aligned strokes" if live_aligned else "Aligning strokes to reference"
+                    job["progress"] = 10
+                try:
+                    ref_geom = preprocess_reference_image(str(ref_path))
+                    if live_aligned:
+                        # Browser snapping improves acquisition; the server still checks every point and segment.
+                        corrected, diag = refine_live_aligned_strokes(normalized["strokes"], ref_geom)
+                        aligned_strokes = corrected
+                        print(
+                            f"[JOB {job_id}] Blueprint validation retained {diag.get('refined_count', 0)} strokes; "
+                            f"rejected {diag.get('rejected_samples', 0)} off-line samples; "
+                            f"p99 deviation {diag.get('geometry_error_p99', 0):.2f}px."
+                        )
+                    else:
+                        # Legacy browser payloads still align first, then pass the same strict geometry check.
+                        corrected, align_diag = correct_stroke_sequence(normalized["strokes"], ref_geom)
+                        aligned_strokes, strict_diag = refine_live_aligned_strokes(corrected, ref_geom)
+                        diag = {**align_diag, **strict_diag}
+                        print(
+                            f"[JOB {job_id}] Reference alignment retained {strict_diag.get('refined_count', 0)} strokes; "
+                            f"rejected {strict_diag.get('rejected_samples', 0)} off-line samples."
+                        )
 
-                        # Save debug diagnostics if enabled
-                        if os.environ.get("KOLAM_DEBUG", "0") == "1" or payload.get("debug"):
-                            debug_dir = OUTPUTS_DIR / f"debug_{job_id[:8]}"
-                            save_alignment_diagnostics(debug_dir, ref_geom, normalized["strokes"], corrected, diag)
-                    except Exception as e:
-                        print(f"[JOB {job_id}] Reference alignment warning: {e}. Falling back to raw strokes.")
+                    if os.environ.get("KOLAM_DEBUG", "0") == "1" or payload.get("debug"):
+                        debug_dir = OUTPUTS_DIR / f"debug_{job_id[:8]}"
+                        save_alignment_diagnostics(debug_dir, ref_geom, normalized["strokes"], aligned_strokes, diag)
+                except Exception as e:
+                    # Blueprint mode must never fall back to drawing unvalidated coordinates.
+                    raise ValueError(f"Blueprint validation failed: {e}") from e
+            elif live_aligned:
+                raise ValueError("Live blueprint tracing requires a valid reference image and correction mode.")
 
             with jobs_lock:
                 job["stage"] = "Synthesizing drawing path"

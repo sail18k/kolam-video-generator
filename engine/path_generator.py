@@ -1,6 +1,159 @@
 
 import numpy as np
 import cv2
+import math
+
+
+def _resample_centerline(points, spacing=3.0):
+    """Resample a centerline at even arc-length intervals."""
+    pts = np.asarray(points, dtype=np.float32)
+    if len(pts) < 2:
+        return pts
+    lengths = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    cumulative = np.concatenate(([0.0], np.cumsum(lengths)))
+    total = float(cumulative[-1])
+    if total <= 1e-6:
+        return pts[:1]
+    targets = np.arange(0.0, total, spacing, dtype=np.float32)
+    if len(targets) == 0 or total - float(targets[-1]) > 1e-3:
+        targets = np.append(targets, total)
+    else:
+        targets[-1] = total
+    out = np.empty((len(targets), 2), dtype=np.float32)
+    seg_idx = 0
+    for i, dist in enumerate(targets):
+        while seg_idx < len(lengths) - 1 and cumulative[seg_idx + 1] < dist:
+            seg_idx += 1
+        seg_len = lengths[seg_idx]
+        frac = 0.0 if seg_len <= 1e-6 else (dist - cumulative[seg_idx]) / seg_len
+        out[i] = pts[seg_idx] * (1.0 - frac) + pts[seg_idx + 1] * frac
+    return out
+
+
+def _generate_skeleton_trace(img, target_w=880, target_h=1520):
+    """Trace clean, dark line-art along its centerline instead of both ink edges."""
+    from engine.reference_alignment import morph_thinning_opencv, extract_skeleton_paths
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
+    _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY_INV)
+    ink_ratio = cv2.countNonZero(binary) / float(binary.size)
+    # Filled/colorful rangoli artwork is better represented by its contours.
+    if ink_ratio > 0.20:
+        return None
+
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    clean = np.zeros_like(binary)
+    for label in range(1, count):
+        if stats[label, cv2.CC_STAT_AREA] >= 8:
+            clean[labels == label] = 255
+    skeleton = morph_thinning_opencv(clean)
+    paths = extract_skeleton_paths(skeleton)
+    # Tiny skeleton spurs are thresholding artifacts; the old contour filter also
+    # discarded components below 20px area. Keep longer intentional linework.
+    paths = [p for p in paths if p.length >= 8.0]
+    if not paths:
+        return None
+
+    paths = _stitch_skeleton_branches(paths)
+
+    all_points = np.vstack([points for points, _is_closed in paths])
+    center = (np.min(all_points, axis=0) + np.max(all_points, axis=0)) / 2.0
+    max_radius = float(np.linalg.norm(np.max(all_points, axis=0) - center))
+    radial_bin_size = max(10.0, max_radius / 20.0)
+
+    def radial_order(item):
+        points, _is_closed = item
+        centroid = np.mean(points, axis=0)
+        dx, dy = float(centroid[0] - center[0]), float(centroid[1] - center[1])
+        radius = math.hypot(dx, dy)
+        angle = math.atan2(dy, dx)
+        return (int(radius / radial_bin_size), angle)
+
+    # Keep the existing inside-out presentation for generated circular designs.
+    paths.sort(key=radial_order)
+
+    x_min, y_min = np.min(all_points, axis=0)
+    x_max, y_max = np.max(all_points, axis=0)
+    img_w = max(1.0, float(x_max - x_min))
+    img_h = max(1.0, float(y_max - y_min))
+    scale = min(target_w / img_w, target_h / img_h)
+    offset_x = (1080 - img_w * scale) / 2.0
+    offset_y = (1920 - img_h * scale) / 2.0
+
+    result = []
+    for source, is_closed in paths:
+        if is_closed and len(source) > 2 and np.linalg.norm(source[0] - source[-1]) > 1.0:
+            source = np.vstack([source, source[0]])
+        sampled = _resample_centerline(source, spacing=3.0)
+        if len(sampled) < 2:
+            continue
+        for x, y in sampled:
+            sx = int(round((float(x) - x_min) * scale + offset_x))
+            sy = int(round((float(y) - y_min) * scale + offset_y))
+            result.append((max(0, min(1079, sx)), max(0, min(1919, sy))))
+        result.append(None)
+    while result and result[-1] is None:
+        result.pop()
+    return result or None
+
+
+def _stitch_skeleton_branches(paths):
+    """Join edge-disjoint skeleton branches at shared junctions to reduce pen lifts."""
+    branches = [p for p in paths if not p.is_closed and len(p.points) >= 2]
+    closed = [(p.points, True) for p in paths if p.is_closed]
+    if not branches:
+        return closed
+
+    def key(point):
+        return (int(round(float(point[0]))), int(round(float(point[1]))))
+
+    endpoints = {}
+    for idx, branch in enumerate(branches):
+        endpoints.setdefault(key(branch.points[0]), []).append(idx)
+        endpoints.setdefault(key(branch.points[-1]), []).append(idx)
+
+    unused = set(range(len(branches)))
+    stitched = []
+    while unused:
+        # Prefer an exposed endpoint so open components begin at a natural end.
+        choices = []
+        for idx in sorted(unused):
+            p = branches[idx].points
+            for reverse in (False, True):
+                start_pt = p[-1] if reverse else p[0]
+                degree = len(endpoints.get(key(start_pt), ()))
+                choices.append((0 if degree == 1 else 1, key(start_pt), idx, reverse))
+        _, _, idx, reverse = min(choices)
+        source = branches[idx].points
+        chain = source[::-1].copy() if reverse else source.copy()
+        unused.remove(idx)
+
+        while len(chain) >= 2:
+            node = key(chain[-1])
+            incoming = chain[-1] - chain[-2]
+            incoming_len = float(np.linalg.norm(incoming)) or 1.0
+            incoming = incoming / incoming_len
+            candidates = []
+            for candidate_idx in endpoints.get(node, ()):
+                if candidate_idx not in unused:
+                    continue
+                candidate = branches[candidate_idx].points
+                if key(candidate[0]) == node:
+                    oriented, reverse_candidate = candidate, False
+                else:
+                    oriented, reverse_candidate = candidate[::-1], True
+                outgoing = oriented[1] - oriented[0]
+                outgoing_len = float(np.linalg.norm(outgoing)) or 1.0
+                alignment = float(np.dot(incoming, outgoing / outgoing_len))
+                candidates.append((-alignment, candidate_idx, reverse_candidate, oriented))
+            if not candidates:
+                break
+            _, next_idx, _, oriented = min(candidates)
+            unused.remove(next_idx)
+            chain = np.vstack([chain, oriented[1:]])
+        stitched.append((chain, False))
+
+    return stitched + closed
 
 def bezier(p0, p1, p2, t):
     """Quadratic bezier"""
@@ -159,6 +312,9 @@ def generate_rangoli_path(dots, input_image_path=None):
     if input_image_path:
         img = cv2.imread(input_image_path, cv2.IMREAD_GRAYSCALE)
         if img is not None:
+            skeleton_path = _generate_skeleton_trace(img)
+            if skeleton_path:
+                return skeleton_path
             _, thresh = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY_INV)
             contours, _ = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
             # Filter out very small noise contours

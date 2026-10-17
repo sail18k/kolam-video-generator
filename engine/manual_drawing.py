@@ -6,9 +6,99 @@ into renderer-compatible continuous paths, color/width buffers, and thumbnail sk
 
 import os
 import math
+from collections import defaultdict
 from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
 import cv2
+
+
+class _StrokeCoverageIndex:
+    """Spatial hash of previously accepted stroke centerlines."""
+
+    def __init__(self, tolerance: float = 1.75, cell_size: float = 8.0):
+        self.tolerance = tolerance
+        self.cell_size = cell_size
+        self.cells: Dict[Tuple[int, int], List[Tuple[float, float, float, float]]] = defaultdict(list)
+
+    def _key(self, x: float, y: float) -> Tuple[int, int]:
+        return (math.floor(x / self.cell_size), math.floor(y / self.cell_size))
+
+    def covers(self, sample: Tuple[float, float, float, float]) -> bool:
+        x, y, tx, ty = sample
+        cx, cy = self._key(x, y)
+        reach = int(math.ceil(self.tolerance / self.cell_size))
+        for gy in range(cy - reach, cy + reach + 1):
+            for gx in range(cx - reach, cx + reach + 1):
+                for ox, oy, otx, oty in self.cells.get((gx, gy), ()):
+                    if abs(tx * otx + ty * oty) < 0.75:
+                        continue
+                    if math.hypot(x - ox, y - oy) <= self.tolerance:
+                        return True
+        return False
+
+    def add(self, points: List[Dict[str, Any]]) -> None:
+        for sample in _sample_polyline(points):
+            self.cells[self._key(sample[0], sample[1])].append(sample[:4])
+
+
+def _sample_polyline(points: List[Dict[str, Any]], spacing: float = 2.0):
+    """Return equally spaced (x, y, tangent-x, tangent-y, time) samples."""
+    if not points:
+        return []
+    if len(points) == 1:
+        p = points[0]
+        return [(float(p["x"]), float(p["y"]), 0.0, 0.0, float(p.get("t", 0.0)))]
+
+    result = []
+    for p0, p1 in zip(points, points[1:]):
+        x0, y0 = float(p0["x"]), float(p0["y"])
+        x1, y1 = float(p1["x"]), float(p1["y"])
+        dx, dy = x1 - x0, y1 - y0
+        length = math.hypot(dx, dy)
+        if length < 1e-6:
+            continue
+        steps = max(1, int(math.ceil(length / spacing)))
+        tx, ty = dx / length, dy / length
+        t0, t1 = float(p0.get("t", 0.0)), float(p1.get("t", 0.0))
+        for i in range(steps):
+            f = i / steps
+            result.append((x0 + dx * f, y0 + dy * f, tx, ty, t0 + (t1 - t0) * f))
+    last = points[-1]
+    prev = points[-2]
+    dx, dy = float(last["x"]) - float(prev["x"]), float(last["y"]) - float(prev["y"])
+    length = math.hypot(dx, dy) or 1.0
+    result.append((float(last["x"]), float(last["y"]), dx / length, dy / length, float(last.get("t", 0.0))))
+    return result
+
+
+def _uncovered_runs(points: List[Dict[str, Any]], coverage: _StrokeCoverageIndex):
+    """Remove long, direction-consistent intervals already drawn by earlier strokes."""
+    samples = _sample_polyline(points)
+    if not samples:
+        return [], 0.0
+    covered = [coverage.covers(sample[:4]) for sample in samples]
+    ratio = sum(covered) / float(len(covered))
+    if ratio >= 0.92:
+        return [], ratio
+    if ratio <= 0.02:
+        return [points], ratio
+
+    runs = []
+    current = []
+    for sample, is_covered in zip(samples, covered):
+        if is_covered:
+            if len(current) >= 2:
+                runs.append(current)
+            current = []
+        else:
+            current.append({
+                "x": max(0, min(1079, int(round(sample[0])))),
+                "y": max(0, min(1919, int(round(sample[1])))),
+                "t": float(sample[4]),
+            })
+    if len(current) >= 2:
+        runs.append(current)
+    return runs or ([points] if ratio < 0.10 else []), ratio
 
 
 def hex_to_bgr(hex_color: str, default: Tuple[int, int, int] = (255, 255, 255)) -> Tuple[int, int, int]:
@@ -50,6 +140,7 @@ def validate_and_normalize_drawing_payload(payload: Dict[str, Any]) -> Dict[str,
     normalized_strokes = []
     seen_ids = set()
     seen_signatures = set()
+    coverage = _StrokeCoverageIndex()
     
     for s_idx, stroke in enumerate(strokes_raw):
         if not isinstance(stroke, dict):
@@ -79,7 +170,10 @@ def validate_and_normalize_drawing_payload(payload: Dict[str, Any]) -> Dict[str,
                 x_val = int(round(float(x)))
                 y_val = int(round(float(y)))
                 t_val = float(t) if t is not None else 0.0
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, OverflowError):
+                continue
+
+            if not math.isfinite(x_val) or not math.isfinite(y_val) or not math.isfinite(t_val):
                 continue
                 
             # Clamp strictly to canvas coordinates
@@ -102,7 +196,8 @@ def validate_and_normalize_drawing_payload(payload: Dict[str, Any]) -> Dict[str,
             continue
             
         # 2. By exact coordinate and timestamp signature (prevents identical double submission)
-        sig = tuple((p["x"], p["y"], round(p["t"], 1)) for p in cleaned_points)
+        coords = tuple((p["x"], p["y"]) for p in cleaned_points)
+        sig = min(coords, tuple(reversed(coords)))
         if sig in seen_signatures:
             continue
             
@@ -111,17 +206,28 @@ def validate_and_normalize_drawing_payload(payload: Dict[str, Any]) -> Dict[str,
         seen_signatures.add(sig)
             
         # If single isolated point (tap / dot), add tiny segment so it renders visibly
-        if len(cleaned_points) == 1:
+        single_tap = len(cleaned_points) == 1
+        if single_tap:
             p0 = cleaned_points[0]
             offset_x = min(1079, p0["x"] + 1)
             cleaned_points.append({"x": offset_x, "y": p0["y"], "t": p0["t"] + 10})
             
-        normalized_strokes.append({
-            "id": stroke_id or f"stroke_{len(normalized_strokes)+1}",
-            "color_bgr": color_bgr,
-            "width": width,
-            "points": cleaned_points
-        })
+        runs, _overlap = _uncovered_runs(cleaned_points, coverage)
+        for run_idx, run in enumerate(runs):
+            # Very short residuals are rasterization noise, not a useful stroke.
+            run_length = sum(math.hypot(b["x"] - a["x"], b["y"] - a["y"]) for a, b in zip(run, run[1:]))
+            if len(run) > 1 and run_length < 2.0 and not single_tap:
+                continue
+            out_id = stroke_id or f"stroke_{len(normalized_strokes)+1}"
+            if len(runs) > 1:
+                out_id = f"{out_id}_part{run_idx+1}"
+            normalized_strokes.append({
+                "id": out_id,
+                "color_bgr": color_bgr,
+                "width": width,
+                "points": run
+            })
+            coverage.add(run)
         
     if not normalized_strokes:
         raise ValueError("Drawing does not contain any valid stroke points.")

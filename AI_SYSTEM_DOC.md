@@ -19,10 +19,10 @@ The system supports two complementary workflows:
 ### Core Generative & Rendering Subsystems
 1. **Multimodal Visual Classification** (Local LLM via Ollama LLaVA-7B with deterministic OpenCV geometric/HSV fallbacks).
 2. **Parametric Dot Grid Generation** (Standard pulli diamond/matrix grids).
-3. **Continuous Path Vectorization** (Bezier loop weaving for Sikku, radial concentric contour tracing for Mandalas/Rangolis).
+3. **Continuous Path Vectorization** (Bezier loop weaving for Sikku, centerline tracing for line-art Mandalas/Rangolis, and contour tracing for filled artwork).
 4. **Hardware-Accelerated Frame Compositing** (NVIDIA NVENC H.264 rendering with realistic pen/hand overlay, wooden background, and animated branding badges).
 5. **Sub-Segment Continuous Interpolation Engine** (Smooth, natural hand-drawing animation allocating frames proportionally to stroke arc length, eliminating stepping artifacts, zero-length segments, or redundant stroke redraws).
-6. **Smooth Gap Transition & Hermite Easing** (Graceful cubic easing across pen-up gap movements between independent strokes).
+6. **Pen-Up Transition Easing** (Graceful eased hand movement across gaps between independent strokes).
 7. **Procedural Auspicious Coloring Thumbnail Generation** (Connected-component color filling, 3D powder depth distance transforms, drop shadows, and high-CTR badges).
 8. **Acoustic Vocal-Removed BGM Processing** (Center-channel vocal attenuation with punchy low-frequency bass preservation, looped seamlessly, muxed via FFmpeg with `-movflags +faststart` for instant web/mobile streaming).
 9. **Dynamic Bilingual SEO & Metadata Engine** (Tamil + English click-worthy titles, descriptions, and motif-aware tags).
@@ -101,10 +101,10 @@ D:\kolam video generation v2\
 ├── engine/                         # Core algorithm & processing modules
 │   ├── classifier.py               # Visual classification (Ollama LLaVA + CV heuristics)
 │   ├── dot_generator.py            # Mathematical dot matrix & pulli grid generator
-│   ├── path_generator.py           # Path calculation, Bezier interpolation & contour tracing
+│   ├── path_generator.py           # Dot-grid paths & centerline/contour sketch tracing
 │   ├── manual_drawing.py           # Vector stroke deduplication, normalization & sketch synthesis
 │   ├── reference_alignment.py      # Reference-guided stroke correction & Viterbi path alignment
-│   ├── renderer.py                 # NVENC/OpenCV frame renderer, sub-segment interpolation & speed scaling
+│   ├── renderer.py                 # NVENC-first frame renderer, arc-length timing & speed scaling
 │   ├── thumbnail_generator.py      # Auspicious color filling, 3D powder & cover generator
 │   ├── audio_processor.py          # Acoustic vocal removal, DSP filter graph & faststart audio muxer
 │   ├── seo_generator.py            # Visual motif analysis & Tamil-English SEO generator
@@ -127,16 +127,15 @@ D:\kolam video generation v2\
 │   ├── 77d59084...-sketch (1).jpg  # Sample input sketch
 │   └── reference.mp4               # Golden reference target video
 │
-├── tests/                          # Automated unit and integration test suite (56 total tests)
-│   ├── test_smooth_rendering_and_speed.py # (14 tests) Sub-segment interpolation, stroke deduplication, speed scaling
-│   ├── test_manual_drawing.py      # (5 tests) Stroke clamping, deduplication, pen-up signals & sketch creation
-│   ├── test_web_api.py             # (8 tests) Integration tests for Flask endpoints, blueprint validation & uploads
-│   ├── test_reference_alignment.py # (5 tests) Tests skeleton thinning, line extraction & geometry matching
-│   ├── test_end_to_end_alignment_render.py # (1 test) E2E alignment to GPU NVENC video rendering test
-│   ├── test_end_to_end_render.py   # (2 tests) Complete vector-to-video NVENC rendering test
-│   ├── test_live_snapping.py       # (7 tests) Geometry serialization & live residual refinement tests
-│   ├── test_classifier.py          # (1 test) Heuristic and fallback classifier tests
-│   └── test_browser_snapping.js    # (13 tests) Node.js test suite for browser ReferenceSnapper engine
+├── tests/                          # Automated unit and integration tests (see current test table below)
+│   ├── test_smooth_rendering_and_speed.py # Arc-length timing, dedupe, frame progression & audio tests
+│   ├── test_manual_drawing.py      # Payload normalization, pen-up signals & sketch synthesis
+│   ├── test_web_api.py             # Flask endpoints, job submission & reference uploads
+│   ├── test_reference_alignment.py # Skeleton extraction, geometry matching & alignment
+│   ├── test_end_to_end_alignment_render.py # Reference alignment to NVENC video render
+│   ├── test_live_snapping.py       # Geometry serialization & strict live-path validation
+│   ├── test_path_generator.py      # Thick-line centerline tracing regression
+│   └── test_browser_snapping.js    # Node.js ReferenceSnapper tests
 │
 └── outputs/                        # Generated output artifacts (*.mp4, *_thumbnail.jpg, *_metadata.txt)
 ```
@@ -198,8 +197,8 @@ flowchart TD
         Resume -->|Yes| Emit
         Resume -->|No: Different Line| MustLift["User Must Lift Pen<br/>Start New Stroke on New Line"]
         
-        P_Up["Pointer Up"] --> LoopCheck{"Endpoint within 20px<br/>of Start Point?"}
-        LoopCheck -->|Yes| CloseLoop["Snap Closed Loop<br/>Wrap-around Step Check"]
+        P_Up["Pointer Up"] --> LoopCheck{"Same closed path and<br/>endpoint gap <= 3px?"}
+        LoopCheck -->|Yes| CloseLoop["Close Tiny Raster Gap<br/>on Active Reference Path"]
         LoopCheck -->|No| EndStroke["Finalize Stroke Delimiter"]
     end
 
@@ -207,11 +206,11 @@ flowchart TD
         EndStroke --> BtnLock["Disable Generate Button<br/>Prevent Double Submission"]
         BtnLock --> Payload["POST /api/generate<br/>(live_aligned=true, drawing_speed=1.2)"]
         Payload --> Queue["Background Async Job Queue<br/>(1 GPU NVENC Job at a Time)"]
-        Queue --> Dedupe["engine/manual_drawing.py<br/>Deduplicate by ID & Coordinate Signature"]
-        Dedupe --> Refine["engine/reference_alignment.py<br/>refine_live_aligned_strokes"]
-        Refine --> SubSplit{"Internal Gap > 35px?"}
-        SubSplit -->|Yes| SplitStrokes["Split into Sub-Strokes<br/>Prevent fabricated bridges"]
-        SubSplit -->|No| Clamp["Coordinate Clamping [0, 1079]x[0, 1919]<br/>Moving-Average Polish"]
+        Queue --> Dedupe["engine/manual_drawing.py<br/>Geometry-aware stroke deduplication"]
+        Dedupe --> Refine["engine/reference_alignment.py<br/>Centerline validation and projection"]
+        Refine --> SubSplit{"Off-line span or jump?"}
+        SubSplit -->|Yes| SplitStrokes["Reject span or split stroke<br/>Never bridge white space"]
+        SubSplit -->|No| Clamp["Bounded integer centerline points<br/>No off-line smoothing"]
         Clamp --> Manual["engine/manual_drawing.py<br/>strokes_to_renderer_path"]
         Manual --> GapDelim{"Distance > 40px?"}
         GapDelim -->|Yes| InjectNone["Inject None Pen-Up Delimiter"]
@@ -286,10 +285,8 @@ flowchart TD
   1. **Sikku Kolam (`generate_sikku_8x2_path`):** Uses quadratic Bezier curves ($\mathbf{B}(t) = (1-t)^2 P_0 + 2(1-t)t P_1 + t^2 P_2$) to route interlaced loops through cell centers around dots rather than intersecting them directly.
   2. **Pulli Kolam (`generate_pulli_path`):** Computes linear interpolations directly connecting adjacent dots across rows.
   3. **Rangoli / Mandala Sketch Tracing (`generate_rangoli_path`):**
-     - Extracts contours via `cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)`.
-     - Normalizes and scales contours to fit within $880 \times 1520$ canvas safe area.
-     - Performs **Radial Concentric Layering (Spatial Sorting):** Computes centroid $(\bar{x}, \bar{y})$ and polar coordinates $(r, \theta)$. Bins into concentric radial tiers ($r_{\text{bin}}$) and sorts by angle ($\theta$) to replicate authentic outwards circular drawing.
-     - **Overlap Elimination:** Maintains a 2D `visited_mask` (thickness 8). Skips any contour where $>50\%$ of points overlap previously drawn strokes.
+     - For sparse, dark line-art sketches, thresholds and thins the ink, decomposes the centerline graph, prunes short threshold spurs, stitches connected branches, and resamples ordered paths at even arc-length intervals. This avoids drawing both boundaries of a thick input line.
+     - Sorts extracted paths by radial layer and angle to retain the existing inside-out presentation, then centers and scales them into the $880 \times 1520$ safe area. Dense or filled/color artwork falls back to the contour and raster-overlap workflow.
 
 ---
 
@@ -297,14 +294,14 @@ flowchart TD
 - **Module Purpose:** Generates individual video frames, applies overlays, animates pen/hand movements, and streams raw frames directly to the hardware video encoder.
 - **Sub-Segment Continuous Interpolation (Version 3.0):**
   - **Arc-Length Cumulative Parameterization:** Computes Euclidean segment distances $d_i = \sqrt{\Delta x^2 + \Delta y^2}$ and cumulative arc length $D(s) = \sum d_i$ for each independent stroke.
-  - **Proportional Frame Allocation:** Frame budget is distributed strictly proportionally to each stroke's geometric arc length ($f_k = \text{round}(F_{\text{draw}} \times \frac{L_k}{L_{\text{total}}})$), preventing short strokes from rushing and long strokes from lagging.
-  - **Speed Multiplier Support (`drawing_speed: float = 1.2`):** Scales available frame budget inversely ($F_{\text{target}} = \text{round}(F_{\text{base}} / \text{speed})$). A multiplier of `1.2x` renders smooth, authentic hand speeds; `0.5x` generates relaxed, extended tutorials.
+  - **Arc-Length Frame Allocation:** Drawing time is based on total path distance at about 8.85 logical pixels per frame at speed 1.0, then apportioned across strokes by length with a two-frame minimum. Changing vertex density does not change playback duration.
+  - **Speed Multiplier Support (`drawing_speed: float = 1.2`):** A multiplier above 1 increases pixels traveled per frame; a multiplier below 1 increases duration. Pen-up repositioning uses a faster distance-proportional pace with a 2-to-30-frame bound.
   - **Sub-Segment Coordinate Interpolation:** For each animation frame $f$, the engine calculates target distance $D_t = \frac{f+1}{N} \cdot L$. It advances along vertices and linearly interpolates exact intermediate coordinates:
     $$\alpha = \frac{D_t - D_{i-1}}{D_i - D_{i-1}}, \quad P(t) = (1 - \alpha) P_{i-1} + \alpha P_i$$
   - **Zero-Length & Single-Point Handling:** Single-point dots ($L < 10^{-4}\text{px}$) are drawn via `cv2.circle` with exact thickness for $N$ frames, eliminating empty render exceptions.
-  - **Cubic Hermite Gap Transitions:** When jumping across pen-up boundaries to the next stroke, the hand moves without drawing along a smooth ease-in/ease-out trajectory:
-    $$\tau = \frac{f_{\text{trans}} + 1}{N_{\text{trans}} + 1}, \quad \text{ease}(\tau) = \tau^2 (3 - 2\tau), \quad P_{\text{trans}} = (1 - \text{ease}) P_{\text{curr}} + \text{ease} P_{\text{next}}$$
+  - **Pen-Up Transitions:** On `None` delimiters, the hand moves without ink along a smooth ease-in/ease-out trajectory and reaches the next stroke's starting point before drawing resumes.
   - **Monotonic Progress Reporting:** Progress callbacks report monotonically from $0.0\%$ to $100.0\%$ across all animation frames with zero backward resets.
+  - **Encoder Lifecycle:** Probes `h264_nvenc` before rendering, streams frames to a temporary MP4, checks the subprocess return code and stderr, then atomically publishes a valid output. Failed NVENC initialization selects FFmpeg `libx264`; OpenCV is the final fallback.
 - **Frame Composition Stack (Bottom to Top):**
   1. **Background Layer:** Textured wood background ($1080 \times 1920$).
   2. **Dot Grid Layer:** Anti-aliased white circles ($r=5\text{ px}$, color `#FFFFFF`).
@@ -408,7 +405,7 @@ flowchart TD
   - `GET /api/system-info` — Returns network address, port, and online status.
   - `POST /api/upload-reference` — Validates and stores reference images in `inputs/uploads/`. Extracts and returns precomputed `geometry` JSON payload (paths, tangents, scale, ROI) for immediate client-side spatial grid construction. **Strict Blueprint Validation:** Requires detectable black linework (`len(paths) > 0` and `len(skel_points) >= 8`). Rejects blank or unrecognizable images with HTTP 400.
   - `GET /api/uploads/<filename>` — Serves uploaded reference images safely.
-  - `POST /api/generate` — Validates drawing strokes, clamps coordinates, and enqueues video rendering with button locking.
+  - `POST /api/generate` — Validates drawing strokes, clamps coordinates, and enqueues video rendering with button locking. Any reference-backed blueprint job is checked against the backend skeleton even when the client says it was live-snapped.
   - `GET /api/jobs/<job_id>` — Returns real-time stage, progress percentage (0-100%), and artifact URLs.
   - `GET /api/jobs/<job_id>/video` — Streams rendered MP4 video with `Accept-Ranges` byte-range support.
   - `GET /api/jobs/<job_id>/thumbnail` — Streams generated YouTube Short thumbnail.
@@ -419,7 +416,8 @@ flowchart TD
 - **Module Purpose:** Validates client-submitted vector stroke data, clamps coordinates to $0 \le x < 1080$ and $0 \le y < 1920$, filters duplicates, and synthesizes renderer-compatible ordered paths.
 - **Multi-Level Stroke Deduplication:**
   1. **Stroke ID Deduplication:** Rejects duplicate stroke objects with identical non-empty IDs within a payload.
-  2. **Coordinate & Timestamp Signature Deduplication:** Computes hash signature `tuple((p["x"], p["y"], round(p["t"], 1)) for p in cleaned_points)`. Identical stroke submissions are automatically discarded.
+  2. **Direction-Independent Geometry Deduplication:** Uses coordinate-only signatures and a spatial hash of resampled centerlines to recognize reversed paths and small coordinate noise.
+  3. **Partial-Overlap Trimming:** Removes long, direction-consistent intervals already covered by earlier strokes while retaining point intersections, loops, and neighboring lines.
 - **Zero-Length & Step Filtering:** Computes Euclidean distance $\Delta = \sqrt{\Delta x^2 + \Delta y^2}$. Consecutive points with $\Delta < 0.5\text{px}$ are omitted as zero-length noise.
 - **Single-Point Dot Expansion:** For isolated taps/dots ($N=1$), adds a micro-segment (`x + 1`) with an artificial time delta so the point renders visibly on canvas and in video.
 - **Stroke Delimiter Translation:** Injects `None` pen-up signals between independent strokes so separate artistic strokes are never accidentally connected.
@@ -460,10 +458,11 @@ flowchart TD
   2. **Multi-Cue Line Extraction:** Combines CLAHE contrast enhancement, adaptive thresholding, Otsu binarization, and Canny edge gradients.
   3. **Golay Morphological Thinning & Topology Decomposition:** Extracts an exact 1-pixel-wide skeleton using morphological hit-or-miss operations, segments non-branching simple curves (`ReferencePath`), and builds a spatial `cKDTree`.
   4. **Orientation Field Estimation:** Computes continuous line orientation angles $\theta \in [0, \pi)$ via the structure tensor.
-  5. **Residual Refinement for Live-Snapped Strokes (`refine_live_aligned_strokes`):**
-     - When `live_aligned: true` is received, avoids re-running heavy Viterbi deformation.
-     - **Sub-Stroke Gap Splitting:** If distance between consecutive points in a stroke exceeds $35\text{px}$, the stroke is automatically split into independent sub-strokes.
-     - Applies conservative residual polish: strict coordinate clamping ($[0, 1079] \times [0, 1919]$), closed-loop endpoint recovery ($\le 20\text{px}$), and moving-average smoothing ($w=3$).
+  5. **Strict Backend Validation for Reference-Backed Strokes (`refine_live_aligned_strokes`):**
+     - `live_aligned` selects the alignment route only; it is not trusted as proof that coordinates are valid.
+     - Checks intermediate positions every 2px against the uploaded centerline, accepts a maximum distance of 3px, and projects submitted vertices to the nearest centerline pixel.
+     - Splits pointer discontinuities above 35px and rejects off-line spans instead of drawing through blank space. Strict blueprint paths are not moving-average smoothed or artificially closed.
+     - Reports accepted-centerline mean, p95, p99, and maximum deviation plus rejected sample count.
 
 ---
 
@@ -654,7 +653,7 @@ python -c "import cv2, torch; print('OpenCV:', cv2.__version__, '| CUDA Availabl
 # 2. Test FFmpeg NVENC Availability
 ffmpeg -f lavfi -i testsrc=size=1080x1920:rate=25 -vcodec h264_nvenc -t 1 -f null -
 
-# 3. Run Smooth Rendering & Speed Multiplier Tests (14 tests)
+# 3. Run Smooth Rendering & Speed Multiplier Tests (18 tests)
 python -m unittest tests/test_smooth_rendering_and_speed.py
 
 # 4. Run Browser Real-Time Blueprint Snapping Tests (Node.js - 13 tests)
@@ -676,23 +675,32 @@ cmd /c stop.bat
 # Or stop a custom port instance: cmd /c "stop.bat 8080"
 ```
 
-### 9.1 Test Suite Breakdown (56 Tests Total — 100% Passing)
+### 9.1 Current Test Suite (2026-10-17)
 
 | Suite / Test File | Runner | Test Count | Key Functionalities Verified |
 | :--- | :--- | :---: | :--- |
-| `tests/test_smooth_rendering_and_speed.py` | Python unittest | **14** | Single-stroke rendering guarantee (deduplication by ID and signature), sequential order preservation across independent strokes, loop validity, zero-length segment prevention on duplicate points, no-replay progressive advancement, pen-up boundary isolation, monotonic progress callbacks without resets, 0.5x slowdown and 1.2x speedup validation, constant 25 FPS verification, audio synchronization without truncation, final 1-second holding period, strict blueprint tracing preservation, and headless CLI compatibility. |
-| `tests/test_browser_snapping.js` | Node.js | **13** | Strict blueprint snapping, white-area blocking on pointerdown, stroke departure pause, gap jump prevention ($> 35\text{px}$), resume continuity, parallel line locking ($> 14\text{px}$ rejection), intersection traversal, rapid move intermediate curve sampling, loop closure ($\le 20\text{px}$), blueprint invalidation on clear, and independent stroke isolation. |
-| `tests/test_web_api.py` | Python unittest | **8** | Index route, system info, blueprint upload with geometry serialization, empty blueprint 400 rejection, invalid extension rejection, job submission & polling, reference-guided job submission, empty strokes error. |
-| `tests/test_live_snapping.py` | Python unittest | **7** | Reference geometry serialization with unit tangents, conservative live residual refinement (`refine_live_aligned_strokes`), sub-stroke splitting on gaps $> 35\text{px}$, payload normalization, end-to-end alignment pipeline. |
-| `tests/test_manual_drawing.py` | Python unittest | **5** | Stroke validation, coordinate clamping ($[0, 1079] \times [0, 1919]$), stroke deduplication, pen-up delimiter (`None`) injection on distance $> 40\text{px}$, sketch image synthesis with gap skipping. |
-| `tests/test_reference_alignment.py` | Python unittest | **5** | Morphological Golay skeletonization, non-branching polyline decomposition, orientation field calculation, Viterbi map-matching. |
-| `tests/test_end_to_end_render.py` | Python unittest | **2** | Hardware NVENC 1080x1920 video frame compositing, wood texture, hand sprite animation, subscriber badges, thumbnail teaser crossfade. |
-| `tests/test_classifier.py` | Python unittest | **1** | Multimodal LLaVA visual classification & deterministic OpenCV HSV/contour heuristic fallbacks. |
-| `tests/test_end_to_end_alignment_render.py` | Python unittest | **1** | Full end-to-end integration: reference upload $\rightarrow$ stroke refinement $\rightarrow$ 125-frame GPU NVENC MP4 render with audio muxing. |
+| `tests/test_smooth_rendering_and_speed.py` | Python unittest | **18** | Arc-length timing, speed scaling, progressive drawing, pen-up isolation, audio sync, geometric duplicate detection, partial overlap trimming, and vertex-density-independent duration. |
+| `tests/test_browser_snapping.js` | Node.js | **13** | Strict snapping, white-area blocking, discontinuity prevention, branch stability, intermediate curve points, safe loop completion, and independent strokes. |
+| `tests/test_web_api.py` | Python unittest | **8** | Flask endpoints, uploads, job submission and polling, and malformed payload handling. |
+| `tests/test_live_snapping.py` | Python unittest | **8** | Geometry serialization, gap splitting, payload normalization, and backend centerline validation with measured error. |
+| `tests/test_manual_drawing.py` | Python unittest | **5** | Payload normalization, coordinate clamping, pen-up delimiters, and sketch generation. |
+| `tests/test_reference_alignment.py` | Python unittest | **9** | Skeleton thinning, topology extraction, geometry matching, and reference correction. |
+| `tests/test_path_generator.py` | Python unittest | **1** | Thick outlined circle traces once along its centerline. |
+| `tests/test_end_to_end_alignment_render.py` | Python unittest | **1** | Reference alignment and NVENC MP4 rendering integration. |
+
+The current checkout runs **50 Python tests** with `python -m unittest discover tests`, plus **13 Node.js tests** with `node tests/test_browser_snapping.js`. The older specification listed `tests/test_end_to_end_render.py` and `tests/test_classifier.py`; neither file exists in this checkout.
 
 ---
 
 ## 10. System Evolution & Architectural Changelog
+
+### Version 3.1 — Geometry, Blueprint Validation & Checked Encoding (October 17, 2026)
+- **Centerline Sketch Tracing:** Clean dark line-art uses a pruned and stitched skeleton graph, avoiding paired inner/outer contours of thick ink; contour tracing remains for filled or dense artwork.
+- **Geometry-Aware Manual Deduplication:** Normalizes stroke points, ignores timestamp and direction differences, tolerates small coordinate noise, and trims long overlapping intervals with a spatial hash while preserving crossings and neighboring lines.
+- **Server-Side Blueprint Enforcement:** Reference-backed studio paths are checked at 2px intervals against the extracted skeleton, projected only within a 3px bound, and split or discarded at invalid spans. Strict paths are no longer moving-average smoothed or shortcut closed.
+- **Arc-Length Timing:** Rendering duration now follows geometric travel distance rather than vertex count, with proportional frame allocation and monotonic segment advancement. Pen-up transitions ease to the next path start without drawing a bridge.
+- **Encoder Error Handling:** NVENC is probed before encoding; frames stream to a temporary file, FFmpeg errors are reported, and valid output is published atomically. `libx264` and OpenCV remain controlled fallbacks.
+- **Documentation Reconciliation:** Earlier specification text claimed arc-length timing and strict live residual processing that were not present in the implementation. The current module descriptions and test inventory above reflect the checked-in code.
 
 ### Version 3.0 — Sub-Segment Continuous Interpolation & Smooth Natural Drawing (October 2026)
 - **Sub-Segment Continuous Interpolation Engine:** Replaced vertex-stepping rendering with continuous parametric Euclidean distance parameterization ($D(s)$). Video frames advance smoothly along stroke segments with exact parametric sub-pixel interpolation ($cx, cy$), eliminating visual stepping, jitter, or jerky motion.

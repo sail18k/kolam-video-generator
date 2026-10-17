@@ -162,6 +162,68 @@ class TestSmoothRenderingAndSpeed(unittest.TestCase):
             if path[i] is not None and path[i-1] is not None:
                 self.assertNotEqual(path[i], path[i-1], "Path must never contain zero-length segments")
 
+    def test_geometric_duplicates_ignore_id_timestamp_and_direction(self):
+        payload = {
+            "strokes": [
+                {"id": "first", "points": [{"x": 100, "y": 100, "t": 0}, {"x": 220, "y": 100, "t": 20}]},
+                {"id": "second", "points": [{"x": 220, "y": 100, "t": 900}, {"x": 100, "y": 100, "t": 1200}]},
+            ]
+        }
+        normalized = validate_and_normalize_drawing_payload(payload)
+        self.assertEqual(len(normalized["strokes"]), 1)
+
+    def test_geometric_duplicates_tolerate_small_coordinate_noise(self):
+        payload = {
+            "strokes": [
+                {"id": "clean", "points": [{"x": 100, "y": 200}, {"x": 160, "y": 200}, {"x": 220, "y": 200}]},
+                {"id": "noisy", "points": [{"x": 100, "y": 201}, {"x": 160, "y": 199}, {"x": 220, "y": 201}]},
+            ]
+        }
+        normalized = validate_and_normalize_drawing_payload(payload)
+        self.assertEqual(len(normalized["strokes"]), 1)
+
+    def test_partial_duplicate_trims_only_the_already_drawn_interval(self):
+        payload = {
+            "strokes": [
+                {"id": "first", "points": [{"x": 100, "y": 300}, {"x": 200, "y": 300}]},
+                {"id": "overlap", "points": [{"x": 150, "y": 300}, {"x": 250, "y": 300}]},
+            ]
+        }
+        normalized = validate_and_normalize_drawing_payload(payload)
+        self.assertEqual(len(normalized["strokes"]), 2)
+        remaining = normalized["strokes"][1]["points"]
+        self.assertGreaterEqual(remaining[0]["x"], 201)
+        self.assertEqual(remaining[-1]["x"], 250)
+
+    def test_intersections_loops_and_neighboring_lines_are_preserved(self):
+        payload = {
+            "strokes": [
+                {"id": "horizontal", "points": [{"x": 100, "y": 400}, {"x": 220, "y": 400}]},
+                {"id": "vertical", "points": [{"x": 160, "y": 340}, {"x": 160, "y": 460}]},
+                {"id": "parallel", "points": [{"x": 100, "y": 404}, {"x": 220, "y": 404}]},
+                {"id": "loop", "points": [{"x": 300, "y": 400}, {"x": 330, "y": 370}, {"x": 360, "y": 400}, {"x": 330, "y": 430}, {"x": 300, "y": 400}]},
+            ]
+        }
+        normalized = validate_and_normalize_drawing_payload(payload)
+        self.assertEqual(len(normalized["strokes"]), 4)
+
+    def test_equal_arc_length_paths_get_equal_drawing_frames(self):
+        path_sparse = [(100, 600), (500, 600)]
+        path_dense = [(100 + i, 600) for i in range(401)]
+        sparse_out = str(self.outputs_dir / "equal_length_sparse.mp4")
+        dense_out = str(self.outputs_dir / "equal_length_dense.mp4")
+        for path, output in ((path_sparse, sparse_out), (path_dense, dense_out)):
+            render_kolam_video(
+                dots=[], path=path, wood_path=self.wood_path, hand_path=self.hand_path,
+                output_path=output, fps=25, show_watermark=False, title="", drawing_speed=1.0
+            )
+        def count_frames(path):
+            cap = cv2.VideoCapture(path)
+            count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            cap.release()
+            return count
+        self.assertEqual(count_frames(sparse_out), count_frames(dense_out))
+
     # -------------------------------------------------------------------------
     # TEST 5: Renderer does not replay earlier segments
     # -------------------------------------------------------------------------

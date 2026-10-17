@@ -82,6 +82,31 @@ class TestLiveSnappingBackend(unittest.TestCase):
         self.assertEqual(ref_pts[-1]["x"], ref_pts[0]["x"])
         self.assertEqual(ref_pts[-1]["y"], ref_pts[0]["y"])
 
+    def test_strict_backend_validation_projects_centerline_and_rejects_white_space(self):
+        ref_geom = preprocess_reference_image(str(self.ref_img_path))
+        stroke = {
+            "id": "strict_line",
+            "color_bgr": (255, 255, 255),
+            "width": 6,
+            "points": [
+                *[{"x": x, "y": 960, "t": (x - 300) // 2} for x in range(300, 501, 20)],
+                {"x": 500, "y": 1200, "t": 200},  # Deliberate jump through white space
+                {"x": 700, "y": 960, "t": 300},
+            ],
+        }
+        refined, diag = refine_live_aligned_strokes([stroke], ref_geom)
+        self.assertGreaterEqual(len(refined), 1)
+        self.assertGreater(diag["rejected_samples"], 0)
+        self.assertLessEqual(diag["geometry_error_p95"], 2.0)
+        self.assertLessEqual(diag["geometry_error_p99"], 3.0)
+        self.assertLessEqual(diag["geometry_error_max"], 3.0)
+        for run in refined:
+            for point in run["points"]:
+                distance, _ = ref_geom.skel_tree.query([point["x"], point["y"]])
+                self.assertLessEqual(distance, 1.0)
+        for run in refined:
+            self.assertFalse(any(p["x"] == 500 and p["y"] == 1200 for p in run["points"]))
+
     def test_validate_and_normalize_live_aligned(self):
         """Verifies that validate_and_normalize_drawing_payload passes live_aligned flag."""
         payload = {

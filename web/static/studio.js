@@ -152,6 +152,8 @@
         // Active stroke tracking state
         activePathId: null,
         activePtIdx: null,
+        activeStartPathId: null,
+        activeStartPtIdx: null,
         lastSnappedPoint: null,
         lastRawPoint: null,
         isPaused: false,
@@ -174,6 +176,8 @@
         resetActiveStroke() {
             this.activePathId = null;
             this.activePtIdx = null;
+            this.activeStartPathId = null;
+            this.activeStartPtIdx = null;
             this.lastSnappedPoint = null;
             this.lastRawPoint = null;
             this.isPaused = false;
@@ -408,6 +412,8 @@
             const pt = { x: Math.round(bestCand.x), y: Math.round(bestCand.y) };
             this.activePathId = bestCand.pathId;
             this.activePtIdx = bestCand.ptIdx;
+            this.activeStartPathId = bestCand.pathId;
+            this.activeStartPtIdx = bestCand.ptIdx;
             this.lastSnappedPoint = pt;
             this.lastRawPoint = { x: rawCoord.x, y: rawCoord.y };
             this.isPaused = false;
@@ -611,11 +617,14 @@
                 return;
             }
 
-            // Closed-loop gap recovery if endpoints are within 20px
+            // Only close a loop when both ends lie on the same closed reference path
+            // and the remaining gap is small enough that a direct pixel correction
+            // cannot cut across a corner or unrelated geometry.
             const p0 = strokePoints[0];
             const pN = strokePoints[strokePoints.length - 1];
             const gap = Math.hypot(p0.x - pN.x, p0.y - pN.y);
-            if (gap <= 20.0) {
+            const activePath = this.pathsMap.get(this.activePathId);
+            if (activePath && activePath.isClosed && this.activePathId === this.activeStartPathId && gap <= 3.0) {
                 strokePoints[strokePoints.length - 1].x = p0.x;
                 strokePoints[strokePoints.length - 1].y = p0.y;
             }

@@ -289,22 +289,37 @@ console.log("===================================================================
     console.log(`  -> Passed! Fast move generated ${move.intermediatePoints.length} centerline points along the curve.`);
 })();
 
-// --- TEST 11: Closed-Loop Gap Recovery on Stroke Finish ---
+// --- TEST 11: Closed-Loop Completion Stays on the Active Reference Path ---
 (() => {
-    console.log("[TEST 11] Closed-Loop Gap Recovery on Stroke Finish...");
+    console.log("[TEST 11] Closed-Loop Completion Stays on the Active Reference Path...");
+    const loop = [[300, 300], [350, 250], [400, 300], [400, 350], [350, 400], [300, 350]];
+    ReferenceSnapper.loadGeometry({
+        paths: [{ id: 7, is_closed: true, points: loop }]
+    });
+    ReferenceSnapper.snapStart({ x: 300, y: 300 });
     const strokePoints = [
         { x: 300, y: 300, t: 0 },
         { x: 350, y: 250, t: 50 },
         { x: 400, y: 300, t: 100 },
         { x: 400, y: 350, t: 150 },
         { x: 350, y: 400, t: 200 },
-        { x: 310, y: 308, t: 250 } // gap = 12.8px
+        { x: 302, y: 301, t: 250 } // small raster gap on the same closed path
     ];
 
     ReferenceSnapper.finishStroke(strokePoints);
     assert.strictEqual(strokePoints[strokePoints.length - 1].x, 300, "Last X should close to start X");
     assert.strictEqual(strokePoints[strokePoints.length - 1].y, 300, "Last Y should close to start Y");
-    console.log("  -> Passed! Endpoint within 20px closed cleanly to start point.");
+
+    ReferenceSnapper.snapStart({ x: 300, y: 300 });
+    const incomplete = [
+        { x: 300, y: 300, t: 0 }, { x: 350, y: 250, t: 50 },
+        { x: 400, y: 300, t: 100 }, { x: 400, y: 350, t: 150 },
+        { x: 350, y: 400, t: 200 }, { x: 310, y: 308, t: 250 }
+    ];
+    ReferenceSnapper.finishStroke(incomplete);
+    assert.strictEqual(incomplete[incomplete.length - 1].x, 310, "A larger gap must not be replaced by a straight shortcut");
+    assert.strictEqual(incomplete[incomplete.length - 1].y, 308, "A larger gap must remain unmodified");
+    console.log("  -> Passed! Tiny same-path raster gaps close; larger incomplete loops are not shortcut.");
 })();
 
 // --- TEST 12: Reference Replacement & Invalidation ---

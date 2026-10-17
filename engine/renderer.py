@@ -1,8 +1,176 @@
 import cv2
 import numpy as np
 import os
+import math
+import bisect
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
+
+
+class _VideoFrameWriter:
+    """FFmpeg/NVENC-first frame writer with checked fallback and cleanup."""
+
+    def __init__(self, output_path, width, height, fps):
+        self.output_path = os.path.abspath(output_path)
+        self.width, self.height, self.fps = width, height, fps
+        self.frame_count = 0
+        self.process = None
+        self.capture = None
+        self.writer = None
+        self.temp_path = None
+        self.closed = False
+
+        parent = os.path.dirname(self.output_path) or os.getcwd()
+        os.makedirs(parent, exist_ok=True)
+        fd, self.temp_path = tempfile.mkstemp(prefix=".kolam_", suffix=".mp4", dir=parent)
+        os.close(fd)
+        os.unlink(self.temp_path)
+
+        ffmpeg = shutil.which("ffmpeg")
+        nvenc_ok, nvenc_error = self._probe(ffmpeg, "h264_nvenc", fps) if ffmpeg else (False, "ffmpeg not found")
+        codec = "h264_nvenc" if nvenc_ok else None
+        if nvenc_ok:
+            print("Using FFmpeg with GPU acceleration (h264_nvenc)")
+        else:
+            print(f"NVENC unavailable; using FFmpeg software H.264: {nvenc_error[-400:]}")
+            if ffmpeg:
+                software_ok, software_error = self._probe(ffmpeg, "libx264", fps)
+                if software_ok:
+                    codec = "libx264"
+                else:
+                    print(f"FFmpeg software H.264 unavailable; trying OpenCV: {software_error[-400:]}")
+
+        if ffmpeg and codec:
+            try:
+                self.capture = tempfile.TemporaryFile()
+                cmd = [
+                    ffmpeg, "-y", "-hide_banner", "-loglevel", "warning",
+                    "-f", "rawvideo", "-vcodec", "rawvideo", "-s", f"{width}x{height}",
+                    "-pix_fmt", "bgr24", "-r", str(fps), "-i", "-", "-an",
+                    "-c:v", codec,
+                ]
+                if codec == "h264_nvenc":
+                    cmd += ["-preset", "p6", "-b:v", "8M"]
+                else:
+                    cmd += ["-preset", "veryfast", "-crf", "18"]
+                cmd += ["-pix_fmt", "yuv420p", "-movflags", "+faststart", self.temp_path]
+                self.process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=self.capture)
+            except OSError as exc:
+                if self.capture:
+                    self.capture.close()
+                    self.capture = None
+                print(f"Failed to start FFmpeg, using OpenCV MP4 fallback: {exc}")
+
+        if self.process is None:
+            self.writer = cv2.VideoWriter(
+                self.temp_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height)
+            )
+            if not self.writer.isOpened():
+                self._discard_temp()
+                raise RuntimeError("Neither FFmpeg nor OpenCV could initialize a video encoder.")
+
+    @staticmethod
+    def _probe(ffmpeg, codec, fps):
+        command = [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+            f"testsrc=size=1080x1920:rate={fps}", "-frames:v", "1", "-c:v", codec, "-f", "null", "-"
+        ]
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+            return result.returncode == 0, (result.stderr or result.stdout or "").strip()
+        except (OSError, subprocess.SubprocessError) as exc:
+            return False, str(exc)
+
+    def _stderr_text(self):
+        if not self.capture:
+            return ""
+        try:
+            self.capture.flush()
+            self.capture.seek(0, os.SEEK_END)
+            size = self.capture.tell()
+            self.capture.seek(max(0, size - 8000))
+            return self.capture.read().decode("utf-8", errors="replace")
+        except Exception:
+            return ""
+
+    def _discard_temp(self):
+        if self.temp_path:
+            try:
+                os.remove(self.temp_path)
+            except OSError:
+                pass
+
+    def write(self, frame):
+        if frame.shape != (self.height, self.width, 3) or frame.dtype != np.uint8:
+            raise ValueError("Video frame must be uint8 BGR at the configured output dimensions.")
+        frame = np.ascontiguousarray(frame)
+        if self.process is not None:
+            if self.process.poll() is not None:
+                raise RuntimeError(f"FFmpeg stopped while rendering. {self._stderr_text()}")
+            try:
+                self.process.stdin.write(frame.tobytes())
+            except (BrokenPipeError, OSError) as exc:
+                raise RuntimeError(f"FFmpeg frame pipe failed. {self._stderr_text()}") from exc
+        else:
+            self.writer.write(frame)
+        self.frame_count += 1
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        error = None
+        if self.process is not None:
+            try:
+                if self.process.stdin and not self.process.stdin.closed:
+                    self.process.stdin.close()
+                return_code = self.process.wait(timeout=120)
+                if return_code != 0:
+                    error = RuntimeError(f"FFmpeg exited with code {return_code}. {self._stderr_text()}")
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait()
+                error = RuntimeError("FFmpeg timed out while finalizing the MP4.")
+            finally:
+                if self.capture:
+                    self.capture.close()
+                    self.capture = None
+        elif self.writer is not None:
+            self.writer.release()
+            self.writer = None
+
+        if error is None and self.temp_path and os.path.exists(self.temp_path) and os.path.getsize(self.temp_path) > 0:
+            os.replace(self.temp_path, self.output_path)
+        else:
+            self._discard_temp()
+            if error is None:
+                error = RuntimeError("Video encoder completed without producing a valid output file.")
+        if error:
+            raise error
+
+    def __del__(self):
+        try:
+            if self.process is not None and self.process.poll() is None:
+                if self.process.stdin and not self.process.stdin.closed:
+                    self.process.stdin.close()
+                self.process.wait(timeout=5)
+        except Exception:
+            try:
+                self.process.kill()
+            except Exception:
+                pass
+        try:
+            if self.writer is not None:
+                self.writer.release()
+            if self.capture is not None:
+                self.capture.close()
+            if not self.closed:
+                self._discard_temp()
+        except Exception:
+            pass
 
 def create_footer_watermark(width=1080, height=1920):
     """Generate high-quality Subscribe, Like, and Share footer watermark badge"""
@@ -300,48 +468,14 @@ def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, li
     # Prepare hand
     hand_img = load_and_prepare_hand(hand_path, target_width=420)
     
-    # Video writer - using ffmpeg with GPU acceleration if available
-    import subprocess
-    
-    ffmpeg_cmd = [
-        'ffmpeg',
-        '-y', # Overwrite
-        '-f', 'rawvideo',
-        '-vcodec', 'rawvideo',
-        '-s', f'{width}x{height}',
-        '-pix_fmt', 'bgr24',
-        '-r', str(fps),
-        '-i', '-', # Input from stdin
-        '-c:v', 'h264_nvenc', # GPU Encoder
-        '-preset', 'p6',
-        '-b:v', '8M',
-        '-pix_fmt', 'yuv420p',
-        '-movflags', '+faststart',
-        output_path
-    ]
-    
-    use_ffmpeg = False
-    try:
-        process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        use_ffmpeg = True
-        print("Using FFmpeg with GPU acceleration (h264_nvenc)")
-    except Exception as e:
-        print(f"Failed to start FFmpeg, falling back to OpenCV: {e}")
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-    
-    # Helper to safely write frames to FFmpeg or OpenCV
+    # Probe NVENC before choosing a codec so initialization failures are handled
+    # before any output frames are consumed.
+    frame_writer = _VideoFrameWriter(output_path, width, height, fps)
     frame_count = 0
     def write_frame_to_output(f_img):
         nonlocal frame_count
-        if use_ffmpeg:
-            try:
-                process.stdin.write(f_img.tobytes())
-            except (BrokenPipeError, OSError):
-                pass
-        else:
-            out.write(f_img)
-        frame_count += 1
+        frame_writer.write(f_img)
+        frame_count = frame_writer.frame_count
     
     # Create base frame with dots
     base = wood.copy()
@@ -384,7 +518,22 @@ def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, li
                 curr_colors = []
                 curr_widths = []
         else:
-            curr_pts.append(pt)
+            try:
+                x, y = int(round(float(pt[0]))), int(round(float(pt[1])))
+            except (TypeError, ValueError, IndexError, OverflowError):
+                if curr_pts:
+                    strokes.append({"points": curr_pts, "colors": curr_colors, "widths": curr_widths})
+                    curr_pts, curr_colors, curr_widths = [], [], []
+                continue
+            if not (0 <= x < width and 0 <= y < height):
+                if curr_pts:
+                    strokes.append({"points": curr_pts, "colors": curr_colors, "widths": curr_widths})
+                    curr_pts, curr_colors, curr_widths = [], [], []
+                continue
+            point = (x, y)
+            if curr_pts and curr_pts[-1] == point:
+                continue
+            curr_pts.append(point)
             c = point_colors[idx] if point_colors and idx < len(point_colors) else None
             w = point_widths[idx] if point_widths and idx < len(point_widths) else None
             curr_colors.append(c)
@@ -413,13 +562,13 @@ def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, li
         s['length'] = total_d
 
     total_path_length = sum(s['length'] for s in strokes)
-    total_points = sum(len(s['points']) for s in strokes)
 
-    # Calculate frame allocation scaled by drawing_speed
-    points_per_frame = 5
-    base_frames = max(80, int(round(total_points / points_per_frame))) if total_points > 0 else 80
+    # Arc-length timing is independent of sampling density. At speed 1.0, the
+    # legacy manual-path pace is about 8.85 canvas pixels per frame.
     eff_speed = max(0.01, float(drawing_speed))
-    target_draw_frames = max(40, int(round(base_frames / eff_speed)))
+    pixels_per_frame = 8.85 * eff_speed
+    minimum_frames = [2 for _ in strokes]
+    target_draw_frames = max(sum(minimum_frames), int(round(total_path_length / pixels_per_frame)))
 
     # Compute transition frame counts between independent strokes
     trans_frames = []
@@ -427,27 +576,27 @@ def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, li
         p_end = strokes[k]['points'][-1]
         p_next = strokes[k+1]['points'][0]
         gap_dist = ((p_next[0] - p_end[0])**2 + (p_next[1] - p_end[1])**2) ** 0.5
-        t_f = max(2, min(8, int(gap_dist / 60.0)))
+        # A lifted hand can reposition faster than it draws, while the same
+        # configurable multiplier still controls the travel interval.
+        transition_distance_per_frame = pixels_per_frame * 3.0
+        t_f = max(2, min(30, int(math.ceil(gap_dist / transition_distance_per_frame))))
         trans_frames.append(t_f)
     total_trans_frames = sum(trans_frames)
 
-    # Allocate drawing frames proportionally to stroke arc lengths
+    # Apportion frames by arc length with largest-remainder rounding. Every
+    # stroke retains a small visible start/end interval, including short dots.
     if strokes:
-        available_draw_frames = max(len(strokes) * 2, target_draw_frames - total_trans_frames)
-        stroke_frames = []
-        if total_path_length > 1e-3:
-            for s in strokes:
-                frac = s['length'] / total_path_length
-                f_count = max(2, int(round(available_draw_frames * frac)))
-                stroke_frames.append(f_count)
+        extra_frames = target_draw_frames - sum(minimum_frames)
+        if extra_frames > 0 and total_path_length > 1e-3:
+            shares = [extra_frames * s['length'] / total_path_length for s in strokes]
+            additions = [int(math.floor(share)) for share in shares]
+            remainder = extra_frames - sum(additions)
+            order = sorted(range(len(strokes)), key=lambda i: (-(shares[i] - additions[i]), i))
+            for i in order[:remainder]:
+                additions[i] += 1
+            stroke_frames = [minimum_frames[i] + additions[i] for i in range(len(strokes))]
         else:
-            f_each = max(2, available_draw_frames // len(strokes))
-            stroke_frames = [f_each] * len(strokes)
-            
-        diff = available_draw_frames - sum(stroke_frames)
-        if diff != 0 and stroke_frames:
-            max_idx = int(np.argmax(stroke_frames))
-            stroke_frames[max_idx] = max(2, stroke_frames[max_idx] + diff)
+            stroke_frames = minimum_frames
     else:
         stroke_frames = []
 
@@ -467,6 +616,7 @@ def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, li
         last_rendered_dist = 0.0
         last_rendered_pt = pts[0]
         last_rendered_idx = 0
+        search_i = 1
         
         if n_pts == 1 or stroke_len < 1e-4:
             # Single-point dot stroke or zero-length stroke
@@ -497,9 +647,9 @@ def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, li
                     target_dist = ((f + 1) / float(n_frames)) * stroke_len
                 
                 # Advance from last_rendered_dist to target_dist
-                target_i = 1
-                while target_i < n_pts - 1 and cum_dist[target_i] < target_dist:
-                    target_i += 1
+                target_i = bisect.bisect_left(cum_dist, target_dist, lo=search_i)
+                target_i = min(n_pts - 1, max(1, target_i))
+                search_i = target_i
                 
                 # Draw intermediate vertices
                 for j in range(last_rendered_idx + 1, target_i):
@@ -568,7 +718,7 @@ def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, li
             curr_tip = strokes[k]['points'][-1]
             n_trans = trans_frames[k]
             for tf in range(n_trans):
-                tau = float(tf + 1) / float(n_trans + 1)
+                tau = float(tf + 1) / float(n_trans)
                 ease = tau * tau * (3.0 - 2.0 * tau)
                 tx = int(round((1.0 - ease) * curr_tip[0] + ease * next_start[0]))
                 ty = int(round((1.0 - ease) * curr_tip[1] + ease * next_start[1]))
@@ -601,14 +751,7 @@ def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, li
     for _ in range(fps):
         write_frame_to_output(final_frame)
     
-    if use_ffmpeg:
-        try:
-            process.stdin.close()
-            process.wait()
-        except Exception:
-            pass
-    else:
-        out.release()
+    frame_writer.close()
         
     print(f"\nVideo saved: {output_path}, {frame_count} frames, {frame_count/fps:.1f}s")
     return output_path
