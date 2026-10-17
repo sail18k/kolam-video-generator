@@ -11,3 +11,73 @@ client_secret*.json
 youtube_token.pickle
 youtube_token.json
 
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage*
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Build and packaging artifacts
+build/
+dist/
+*.egg-info/
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+client_secrets*.json
+client_secret*.json
+!client_secrets.json.example
+credentials*.json
+
+# YouTube / Google OAuth tokens
+youtube_token.pickle
+youtube_token.json
+token.pickle
+
+# Generated videos and temporary files
+outputs/
+output/
+renders/
+rendered/
+temp/
+tmp/
+.cache/
+cache/
+
+# Legacy backup and temporary directories
+backupv2/
+temp_extract/
+temp_v2/
+
+# Runtime files and logs
+*.pid
+*.log
+*.tmp
+*.bak
+*~
+
+# Web frontend dependencies and build output
+node_modules/
+web/node_modules/
+web/dist/
+web/build/
+coverage/
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
