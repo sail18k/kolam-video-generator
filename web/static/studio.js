@@ -53,6 +53,10 @@
     const seoTitleText = document.getElementById('seoTitleText');
     const seoTagsText = document.getElementById('seoTagsText');
     const btnDownloadVideo = document.getElementById('btnDownloadVideo');
+    const btnDownloadVideo3d = document.getElementById('btnDownloadVideo3d');
+    const tabVideo2d = document.getElementById('tabVideo2d');
+    const tabVideo3d = document.getElementById('tabVideo3d');
+    const renderingModeBadge = document.getElementById('renderingModeBadge');
     const btnDownloadThumb = document.getElementById('btnDownloadThumb');
     const btnContinueDrawing = document.getElementById('btnContinueDrawing');
     const btnDismissError = document.getElementById('btnDismissError');
@@ -1144,8 +1148,51 @@
         modalCompleteView.style.display = 'block';
         modalCloseBtn.style.display = 'block';
 
-        resultVideo.src = job.video_url;
-        resultVideo.load();
+        const url2d = job.video_url;
+        const url3d = job.video_3d_url;
+
+        function switchVideoVersion(version) {
+            if (version === '3d' && url3d) {
+                resultVideo.src = url3d;
+                resultVideo.load();
+                if (tabVideo3d) tabVideo3d.classList.add('active');
+                if (tabVideo2d) tabVideo2d.classList.remove('active');
+                if (btnDownloadVideo3d) btnDownloadVideo3d.style.display = 'inline-flex';
+                btnDownloadVideo.style.display = 'none';
+            } else {
+                resultVideo.src = url2d;
+                resultVideo.load();
+                if (tabVideo2d) tabVideo2d.classList.add('active');
+                if (tabVideo3d) tabVideo3d.classList.remove('active');
+                btnDownloadVideo.style.display = 'inline-flex';
+                if (btnDownloadVideo3d) btnDownloadVideo3d.style.display = 'none';
+            }
+        }
+
+        if (tabVideo2d) {
+            tabVideo2d.onclick = () => switchVideoVersion('2d');
+        }
+
+        if (tabVideo3d) {
+            if (url3d) {
+                tabVideo3d.style.display = 'inline-flex';
+                tabVideo3d.onclick = () => switchVideoVersion('3d');
+            } else {
+                tabVideo3d.style.display = 'none';
+            }
+        }
+
+        if (renderingModeBadge) {
+            if (job.rendering_mode === 'comfyui_enhanced') {
+                renderingModeBadge.innerHTML = '✨ <strong style="color: #c084fc;">ComfyUI AI Enhanced 3D</strong> • High-realism raised powder';
+            } else if (url3d) {
+                renderingModeBadge.innerHTML = '✨ <strong style="color: #60a5fa;">3D Raised Powder</strong> • Physical height-field lighting on wood';
+            } else {
+                renderingModeBadge.textContent = '';
+            }
+        }
+
+        switchVideoVersion('2d');
 
         if (job.thumbnail_url) {
             resultThumbnail.src = job.thumbnail_url;
@@ -1157,7 +1204,10 @@
             btnDownloadThumb.style.display = 'none';
         }
 
-        btnDownloadVideo.href = job.video_url;
+        btnDownloadVideo.href = url2d;
+        if (btnDownloadVideo3d && url3d) {
+            btnDownloadVideo3d.href = url3d;
+        }
 
         if (job.meta_dict) {
             seoTitleText.textContent = job.meta_dict.title || 'N/A';

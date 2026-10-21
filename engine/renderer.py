@@ -718,7 +718,9 @@ def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, li
                 ease = tau * tau * (3.0 - 2.0 * tau)
                 tx = int(round((1.0 - ease) * curr_tip[0] + ease * next_start[0]))
                 ty = int(round((1.0 - ease) * curr_tip[1] + ease * next_start[1]))
-                trans_tip = (tx, ty)
+                # 3D Airborne pen-lift elevation (-18px at apex) with soft ease landing
+                lift_y = int(round(-18.0 * math.sin(math.pi * tau)))
+                trans_tip = (tx, ty + lift_y)
                 
                 # Canvas untouched during pen-up transition
                 frame = canvas.copy()

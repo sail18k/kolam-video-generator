@@ -201,6 +201,17 @@
 
                     <!-- Complete View (Video & Thumbnail Preview) -->
                     <div class="complete-view" id="modalCompleteView" style="display:none;">
+                        <!-- Video Version Selector Tabs -->
+                        <div class="video-tabs-bar" style="display: flex; gap: 8px; margin-bottom: 12px; justify-content: center;">
+                            <button type="button" id="tabVideo2d" class="btn btn-secondary active" style="padding: 6px 14px; font-size: 13px;">
+                                <span>🎬</span> Original 2D Video
+                            </button>
+                            <button type="button" id="tabVideo3d" class="btn btn-secondary" style="padding: 6px 14px; font-size: 13px;">
+                                <span>✨</span> 3D Enhanced Video
+                            </button>
+                        </div>
+                        <div id="renderingModeBadge" style="text-align: center; font-size: 12px; color: var(--text-secondary); margin-bottom: 12px;"></div>
+
                         <div class="media-preview-container">
                             <div class="video-preview-wrapper">
                                 <video id="resultVideo" controls autoplay loop playsinline></video>
@@ -226,7 +237,10 @@
                         <!-- Action Buttons -->
                         <div class="complete-actions">
                             <a id="btnDownloadVideo" class="btn btn-primary" download>
-                                <span>📥</span> Download MP4 Video
+                                <span>📥</span> Download 2D Video
+                            </a>
+                            <a id="btnDownloadVideo3d" class="btn btn-primary" download style="display: none; background: linear-gradient(135deg, #7c3aed, #db2777);">
+                                <span>✨</span> Download 3D Video
                             </a>
                             <a id="btnDownloadThumb" class="btn btn-secondary" download>
                                 <span>🖼️</span> Download Thumbnail

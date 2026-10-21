@@ -411,6 +411,11 @@ def generate_rangoli_path(dots, input_image_path=None):
             x = int(center[0] + r * np.cos(a))
             y = int(center[1] + r * np.sin(a))
             path.append((x,y))
+        path.append(None)
+    while path and path[-1] is None:
+        path.pop()
+    return path
+
 def generate_path_for_type(kolam_type, dots, input_image_path=None):
     if kolam_type == "sikku_kolam":
         return generate_sikku_8x2_path(dots)

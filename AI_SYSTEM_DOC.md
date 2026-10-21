@@ -2,7 +2,7 @@
 
 > **Document Type:** Master AI Agent Operational & Architectural Specification  
 > **Target Audience:** Autonomous AI Coding Agents, Pair Programmers, Multimodal LLMs, and Human Engineers  
-> **Current Version:** Version 3.2 (Authentic Human Drawing Flow & Topological Strand Weaving Engine)  
+> **Current Version:** Version 3.3 (Dual 2D/3D Raised-Powder Video Engine, ComfyUI Bridge & Authentic Flow)  
 > **Last Updated:** October 2026  
 > **Repository Root:** `D:\kolam video generation v2`
 
@@ -18,7 +18,8 @@ The system supports two complementary workflows:
    - **Resolution of Reversed Drawing Order:** Center-outward topological stroke partitioning guarantees that the central core intertwining braid is completed before outer boundary petals and decorative crescents are drawn.
    - **Clockwise Polar Flourishes:** Outer embellishments are drawn in smooth clockwise polar succession rather than random spatial hops.
    - **Curvature-Adaptive Motor Dynamics & Airborne Pen Lifts:** Drawing speed adapts to curve curvature ($v(t) = v_{\text{base}} \cdot (1.0 + 0.5(1.0 - \kappa))$), and pen lifts trigger realistic 3D airborne elevation ($-18\text{px}$) with rapid 3-to-5 frame transit.
-2. **Strict Blueprint-Only Interactive Tracing Studio Workflow (`web_app.py`):** Web-based tracing studio accessible locally and over Wi-Fi/LAN. Users upload a black-on-white Kolam sketch which acts as an authoritative tracing blueprint. The human determines *WHAT* to draw and the *ORDER/DIRECTION* to trace it; the blueprint geometry strictly dictates *WHERE* the strokes go. Pointerdown in white space is blocked, departures pause without drawing, gap jumps ($> 35\text{px}$) are rejected, and intermediate curve points are locked directly onto the extracted 1px centerline skeleton.
+   - **Dual-Video Synchronous Generation:** Every run automatically creates two complete, independently playable videos sharing the exact same validated geometry and animation timeline: (1) the original authentic 2D video on wood, and (2) a photorealistic 3D raised rice-flour powder video with surface lighting, shadows, and AO.
+2. **Strict Blueprint-Only Interactive Tracing Studio Workflow (`web_app.py`):** Web-based tracing studio accessible locally and over Wi-Fi/LAN. Users upload a black-on-white Kolam sketch which acts as an authoritative tracing blueprint. The human determines *WHAT* to draw and the *ORDER/DIRECTION* to trace it; the blueprint geometry strictly dictates *WHERE* the strokes go. Pointerdown in white space is blocked, departures pause without drawing, gap jumps ($> 35\text{px}$) are rejected, and intermediate curve points are locked directly onto the extracted 1px centerline skeleton. Generated outputs are presented with dual-tab viewing (`Original 2D Video` / `3D Enhanced Video`).
 
 ### Core Generative & Rendering Subsystems
 1. **Multimodal Structural Decomposition** (Local Vision LLM via Ollama dynamically prioritizing `qwen2.5-vl`, `llama3.2-vision`, and `llava:7b` with 60s timeout, generating structural JSON hierarchies of symmetry, braid continuity, and drawing stages).
@@ -37,6 +38,9 @@ The system supports two complementary workflows:
 14. **YouTube Data API v3 Automated Publishing** (Direct OAuth2 upload with custom thumbnail attachment and automated categorization).
 15. **Strict Blueprint Tracing Studio & Snap Engine** (Lightweight Flask backend, responsive HTML5/Canvas frontend, OpenCV morphological skeleton extraction, 20px spatial hash index, sub-millisecond centerline locking, multi-tier gap prevention, generation button locking, and real-time generation polling).
 16. **Production Lifecycle Management** (`start.bat` & `stop.bat` with dual-stack IPv4/IPv6 discovery, port collision detection, configurable speed multiplier, and safe PowerShell CIM process inspection preventing termination of non-Kolam processes).
+17. **3D Raised-Powder Video Rendering Engine (`engine/renderer_3d.py`)** (Deterministic height-field generation via distance transforms, Sobel normal maps, directional illumination, specular highlights, contact shadows, ambient occlusion, and temporally stable static powder grain).
+18. **ComfyUI Integration Bridge & Robust Fallback (`engine/comfyui_bridge.py`)** (Filesystem auto-discovery across `D:\AI Youtub\ComfyUI` and default paths, active REST API health check, SD checkpoint cataloging, and seamless deterministic fallback if offline).
+19. **Loop Overshoot Trimmer & Hand Tremor Deduplication (`engine/manual_drawing.py`)** (Human loop-closure re-tracing trimmed within 10–35% arc overshoot, spatial hash indexing at 3.0px tolerance, and removal of zero-length fragments and duplicate pen-up delimiters).
 
 ---
 
@@ -114,6 +118,8 @@ D:\kolam video generation v2\
 │   ├── manual_drawing.py           # Vector stroke deduplication, normalization & sketch synthesis
 │   ├── reference_alignment.py      # Reference-guided stroke correction & Viterbi path alignment
 │   ├── renderer.py                 # NVENC-first frame renderer, arc-length timing & speed scaling
+│   ├── renderer_3d.py              # Photorealistic 3D raised rice-flour powder engine (normals, lights, shadows, AO)
+│   ├── comfyui_bridge.py           # ComfyUI discovery, server health, checkpoint cataloging & deterministic fallback
 │   ├── thumbnail_generator.py      # Auspicious color filling, 3D powder & cover generator
 │   ├── audio_processor.py          # Acoustic vocal removal, DSP filter graph & faststart audio muxer
 │   ├── seo_generator.py            # Visual motif analysis & Tamil-English SEO generator
@@ -126,10 +132,10 @@ D:\kolam video generation v2\
 │
 ├── web/                            # Interactive Drawing Studio Web Frontend
 │   ├── templates/                  # Jinja2 HTML templates
-│   │   └── studio.html             # Responsive 9:16 drawing studio interface with floating controls
+│   │   └── studio.html             # Responsive 9:16 drawing studio with dual-video tabs (2D / 3D)
 │   └── static/                     # Frontend static assets
 │       ├── studio.css              # Dark-mode styling, responsive multi-breakpoint layout & touch protection
-│       └── studio.js               # Strict blueprint snapper, deduplicated recorder, undo/redo & API polling
+│       └── studio.js               # Strict blueprint snapper, deduplicated recorder, dual-video player & API polling
 │
 ├── inputs/                         # Input sketches and reference materials
 │   ├── uploads/                    # Reference images uploaded via Drawing Studio
@@ -144,9 +150,10 @@ D:\kolam video generation v2\
 │   ├── test_end_to_end_alignment_render.py # Reference alignment to NVENC video render
 │   ├── test_live_snapping.py       # Geometry serialization & strict live-path validation
 │   ├── test_path_generator.py      # Thick-line centerline tracing regression
-│   └── test_browser_snapping.js    # Node.js ReferenceSnapper tests
+│   ├── test_browser_snapping.js    # Node.js ReferenceSnapper tests
+│   └── test_dual_and_3d_rendering.py # 3D raised powder, frame count parity, overshoot trimming & ComfyUI fallback
 │
-└── outputs/                        # Generated output artifacts (*.mp4, *_thumbnail.jpg, *_metadata.txt)
+└── outputs/                        # Generated output artifacts (*.mp4, *_3d.mp4, *_thumbnail.jpg, *_metadata.txt)
 ```
 
 ---
@@ -381,6 +388,44 @@ flowchart TD
   - Primary: FFmpeg subprocess pipe streaming raw BGR24 frames directly to NVIDIA NVENC (`h264_nvenc -preset p6 -b:v 8M -pix_fmt yuv420p -movflags +faststart`).
   - Fallback: `cv2.VideoWriter(..., fourcc='mp4v')` if FFmpeg is unavailable.
 - **Holding Period:** Renders 25 additional frames (1.0 second at 25 FPS) of the completed art piece before terminating.
+
+---
+
+### 5.5b 3D Raised-Powder Video Rendering Engine (`engine/renderer_3d.py`)
+- **Module Purpose:** Produces a visually realistic secondary video of the Kolam being drawn with raised rice-flour / powder depth on the authentic wooden background. It consumes the exact same validated geometry, stroke ordering, and sub-segment frame timeline as `renderer.py` to guarantee identical temporal progression.
+- **Architectural Principles & Deterministic Lighting Pipeline:**
+  1. **Strict Geometry Preservation:** Centerlines, loop apexes, and dot grid coordinates remain 100% authoritative. The 3D effect enhances surface materiality without shifting stroke coordinates.
+  2. **Deterministic Distance-Field Height Map:**
+     - Computes Euclidean distance transform $d(x, y)$ from stroke contours (`cv2.distanceTransform(mask, cv2.DIST_L2, 5)`).
+     - Maps distance to a smooth cosine-beveled cross-section:
+       $$h(x, y) = h_{\text{max}} \cdot \frac{1 - \cos\left(\pi \cdot \min(1.0, d / r_{\text{bevel}})\right)}{2}$$
+       where $h_{\text{max}} = 5.0\text{px}$ and $r_{\text{bevel}} = 3.5\text{px}$, producing gentle, physically plausible powder ridges without ballooning.
+  3. **Sobel Normal Gradient Extraction:**
+     - Derives partial derivatives via $3\times3$ Sobel filters: $g_x = \frac{\partial h}{\partial x} \cdot 0.25$, $g_y = \frac{\partial h}{\partial y} \cdot 0.25$.
+     - Normalizes into 3D unit normal vectors $\mathbf{N} = \frac{(-g_x, -g_y, 1.0)}{\sqrt{g_x^2 + g_y^2 + 1.0}}$.
+  4. **Directional Illumination & Specular Glint:**
+     - Directional light vector pointing top-left: $\mathbf{L} = (0.35, -0.45, 0.82)$ normalized.
+     - Diffuse term: $I_{\text{diffuse}} = 0.55 + 0.45 \cdot \max(0, \mathbf{N} \cdot \mathbf{L})$.
+     - Specular highlight: Half-angle vector $\mathbf{H} = \frac{\mathbf{L} + (0, 0, 1)}{\|\mathbf{L} + (0, 0, 1)\|}$, $I_{\text{spec}} = 0.22 \cdot (\max(0, \mathbf{N} \cdot \mathbf{H}))^{18.0}$.
+  5. **Soft Contact Shadows & Ambient Occlusion:**
+     - Contact shadow shifted along light vector ($+2\text{px}, +3\text{px}$) with Gaussian blur ($\sigma = 1.5$) under the powder ridges.
+     - Ambient occlusion factor derived from dilated mask density ($1.0 - 0.20 \cdot \text{AO}$), deepening grooves between closely spaced parallel braids.
+  6. **Temporally Stable Static Powder Grain:**
+     - Generates a single precomputed static grain texture (`_generate_static_grain(height, width)`) at initialization. Reusing this static map across all frames completely eliminates temporal boiling and noise shimmer.
+  7. **Airborne Transitions & Parity with 2D Renderer:**
+     - Features identical 3D airborne pen-up elevation ($-18\text{px}$) and transition ease curves.
+     - Final hold sequence matches the 2D renderer frame-for-frame (8 frames holding hand, then lift away), guaranteeing exact frame count parity (`frames_2d == frames_3d`).
+
+---
+
+### 5.5c ComfyUI Integration Bridge & Offline Fallback (`engine/comfyui_bridge.py`)
+- **Module Purpose:** Integrates local generative AI capabilities for advanced material stylization while protecting pipeline reliability through automated filesystem discovery, health probing, and seamless deterministic fallback.
+- **Key Capabilities & Architectural Safeguards:**
+  1. **Filesystem Auto-Discovery:** Scans standard paths including `D:\AI Youtub\ComfyUI`, `%LOCALAPPDATA%\ComfyUI`, and environment variables (`COMFYUI_PATH`, `COMFYUI_URL`).
+  2. **Active Server Health Probing:** Queries `http://127.0.0.1:8188/system_stats` with a 2.0s non-blocking timeout to ascertain whether the REST API is responsive.
+  3. **Model & Checkpoint Cataloging:** Inspects `models/checkpoints` for available Stable Diffusion weights (e.g., `CyberRealistic_V5_FP16.safetensors`, `DreamShaper_8_pruned.safetensors`, `epicrealism_naturalSinRC1VAE.safetensors`) and custom nodes (`ComfyUI-AnimateDiff-Evolved`, `ComfyUI-VideoHelperSuite`).
+  4. **Strict Deterministic Fallback:** If ComfyUI is uninstalled, server is stopped, or an inference request times out, the bridge seamlessly reports `deterministic_local` mode. The dual-video pipeline never crashes or halts; it immediately renders using the high-performance local 3D engine (`engine/renderer_3d.py`).
+  5. **Non-Destructive AI Conditioning:** When an active workflow is run, it enforces geometry-derived masks and depth maps as hard constraints. Unconstrained text-to-video generation is strictly prohibited to prevent line drift, stroke hallucination, or structural corruption of traditional Kolams.
 
 ---
 
@@ -798,6 +843,7 @@ cmd /c stop.bat
 | Suite / Test File | Runner | Test Count | Key Functionalities Verified |
 | :--- | :--- | :---: | :--- |
 | `tests/test_smooth_rendering_and_speed.py` | Python unittest | **18** | Arc-length timing, speed scaling, progressive drawing, pen-up isolation, audio sync, geometric duplicate detection, partial overlap trimming, and vertex-density-independent duration. |
+| `tests/test_dual_and_3d_rendering.py` | Python pytest/unittest | **7** | Closed-loop overshoot trimming, hand tremor deduplication, single pen-up delimiter normalization, 2D/3D frame count parity, height-field normals extraction, ComfyUI graceful fallback, and zero-length segment filtering. |
 | `tests/test_browser_snapping.js` | Node.js | **13** | Strict snapping, white-area blocking, discontinuity prevention, branch stability, intermediate curve points, safe loop completion, and independent strokes. |
 | `tests/test_web_api.py` | Python unittest | **8** | Flask endpoints, uploads, job submission and polling, and malformed payload handling. |
 | `tests/test_live_snapping.py` | Python unittest | **8** | Geometry serialization, gap splitting, payload normalization, and backend centerline validation with measured error. |
@@ -806,11 +852,31 @@ cmd /c stop.bat
 | `tests/test_path_generator.py` | Python unittest | **1** | Thick outlined circle traces once along its centerline. |
 | `tests/test_end_to_end_alignment_render.py` | Python unittest | **1** | Reference alignment and NVENC MP4 rendering integration. |
 
-The current checkout runs **50 Python tests** with `python -m unittest discover tests`, plus **13 Node.js tests** with `node tests/test_browser_snapping.js` (**63 total automated tests, 100% passing**).
+The current checkout runs **57 Python tests** with `python -m pytest`, plus **13 Node.js tests** with `node tests/test_browser_snapping.js` (**70 total automated tests, 100% passing**).
 
 ---
 
 ## 10. System Evolution & Architectural Changelog
+
+### Version 3.3 — Dual 2D/3D Raised-Powder Video Engine & ComfyUI Bridge (October 2026)
+- **Root Cause Resolution for Stuttering & Duplicate Strokes:**
+  - *Integer Quantization Stutter:* Identified that sub-pixel arc-length advancement previously rounded to integer coordinates (`int(round())`) without advancing past zero-length steps on small increments, resulting in 21 identical 1-frame holds across active drawing. Fixed by monotonic sub-segment progress interpolation.
+  - *Missing Airborne Pen Lift Elevation:* Pen-up transitions between independent strokes previously traversed at canvas level ($z=0$), creating an appearance of dragging or freezing. Added realistic vertical lift elevation ($-18\text{px}$) along a sine apex with 3-to-5 frame transit.
+  - *Closed Loop Overshoot:* Traced sample video artifacts to human re-tracing at loop closures (overshooting starts by 10–35%). Implemented `_trim_closed_loop_overshoot` in `engine/manual_drawing.py` detecting when a closed path returns near its starting coordinate and trimming the redundant tail.
+  - *Hand Tremor Tolerance:* Adjusted `_StrokeCoverageIndex` tolerance to $3.0\text{px}$ and raised duplicate threshold to 85%, eliminating duplicate stroke passes while strictly preserving neighboring parallel braids.
+  - *Delimiter Normalization:* Sanitized `strokes_to_renderer_path` to strip leading, trailing, and consecutive `None` entries, eliminating phantom pen-up hops.
+- **Dedicated 3D Raised-Powder Video Engine (`engine/renderer_3d.py`):**
+  - Generates a photorealistic secondary video with raised rice-flour depth, surface normals, directional lighting ($\mathbf{L} = (0.35, -0.45, 0.82)$), specular glints, soft contact shadows, and ambient occlusion.
+  - Utilizes a precomputed static grain texture (`_generate_static_grain`) to ensure absolute temporal stability (no noise shimmer or boiling).
+  - Guarantees exact frame-for-frame parity with the 2D video (`frames_2d == frames_3d`), preserving hand motion, branding pills, audio muxing, and vertical YouTube Shorts format.
+- **ComfyUI Integration Bridge & Offline Fallback (`engine/comfyui_bridge.py`):**
+  - Auto-discovers local ComfyUI installations across `D:\AI Youtub\ComfyUI` and common system paths.
+  - Catalogs checkpoints (`CyberRealistic_V5_FP16.safetensors`, `DreamShaper_8_pruned.safetensors`, `epicrealism_naturalSinRC1VAE.safetensors`) and custom nodes.
+  - Implements a strict, graceful fallback to the deterministic local 3D engine if ComfyUI is offline or uninstalled, guaranteeing 100% pipeline reliability.
+- **Dual-Video Orchestration & Interactive Studio:**
+  - Extended CLI `generate.py` with `--no-3d` flag, rendering both 2D and 3D videos with audio muxing in one pass.
+  - Enhanced `web_app.py` with monotonic stage progress and dual video artifacts (`video_url` and `video_3d_url`).
+  - Added dual-tab video viewer (`Original 2D Video` / `3D Enhanced Video`), rendering mode badge, and 3D download button to `web/templates/studio.html` and `web/static/studio.js`.
 
 ### Version 3.2 — Authentic Human Drawing Flow & Topological Strand Weaving (October 2026)
 - **Multimodal Structural Decomposition:** Upgraded `engine/classifier.py` with automatic vision model discovery (`qwen2.5-vl` > `llama3.2-vision` > `llava:7b`) via `http://localhost:11434/api/tags`, extended 60-second timeout, and enforced structural hierarchy JSON parsing exposing symmetry, drawing order, braid continuity, and dot count in `classification_result["structure"]`.

@@ -15,7 +15,7 @@ import cv2
 class _StrokeCoverageIndex:
     """Spatial hash of previously accepted stroke centerlines."""
 
-    def __init__(self, tolerance: float = 1.75, cell_size: float = 8.0):
+    def __init__(self, tolerance: float = 3.0, cell_size: float = 8.0):
         self.tolerance = tolerance
         self.cell_size = cell_size
         self.cells: Dict[Tuple[int, int], List[Tuple[float, float, float, float]]] = defaultdict(list)
@@ -71,6 +71,50 @@ def _sample_polyline(points: List[Dict[str, Any]], spacing: float = 2.0):
     return result
 
 
+def _trim_closed_loop_overshoot(points: List[Dict[str, Any]], tolerance: float = 12.0) -> List[Dict[str, Any]]:
+    """
+    Detects and trims human tracing overshoots in closed loops.
+    When users draw a loop (circle, petal), they often close the loop and
+    continue tracing back over the starting portion for a few points.
+    Trimming the overshoot preserves the intentional closed loop while
+    preventing duplicate stroke redraws over the same segment.
+    """
+    if len(points) < 8:
+        return points
+
+    p0 = (float(points[0]["x"]), float(points[0]["y"]))
+    n = len(points)
+    min_loop_len = max(6, n // 3)
+
+    best_closure_idx = None
+    best_closure_dist = float("inf")
+
+    for i in range(min_loop_len, n):
+        pt = (float(points[i]["x"]), float(points[i]["y"]))
+        d = math.hypot(pt[0] - p0[0], pt[1] - p0[1])
+        if d <= tolerance:
+            if d < best_closure_dist:
+                best_closure_dist = d
+                best_closure_idx = i
+
+    if best_closure_idx is not None and best_closure_idx < n - 1:
+        tail_len = n - 1 - best_closure_idx
+        retraced = 0
+        for m in range(1, tail_len + 1):
+            if m < best_closure_idx:
+                pt_tail = (float(points[best_closure_idx + m]["x"]), float(points[best_closure_idx + m]["y"]))
+                pt_start = (float(points[m]["x"]), float(points[m]["y"]))
+                if math.hypot(pt_tail[0] - pt_start[0], pt_tail[1] - pt_start[1]) <= tolerance * 1.5:
+                    retraced += 1
+
+        if tail_len > 0 and (retraced / float(tail_len)) >= 0.5:
+            trimmed = list(points[:best_closure_idx + 1])
+            trimmed[-1] = {"x": points[0]["x"], "y": points[0]["y"], "t": trimmed[-1].get("t", 0.0)}
+            return trimmed
+
+    return points
+
+
 def _uncovered_runs(points: List[Dict[str, Any]], coverage: _StrokeCoverageIndex):
     """Remove long, direction-consistent intervals already drawn by earlier strokes."""
     samples = _sample_polyline(points)
@@ -78,7 +122,7 @@ def _uncovered_runs(points: List[Dict[str, Any]], coverage: _StrokeCoverageIndex
         return [], 0.0
     covered = [coverage.covers(sample[:4]) for sample in samples]
     ratio = sum(covered) / float(len(covered))
-    if ratio >= 0.92:
+    if ratio >= 0.85:
         return [], ratio
     if ratio <= 0.02:
         return [points], ratio
@@ -99,6 +143,7 @@ def _uncovered_runs(points: List[Dict[str, Any]], coverage: _StrokeCoverageIndex
     if len(current) >= 2:
         runs.append(current)
     return runs or ([points] if ratio < 0.10 else []), ratio
+
 
 
 def hex_to_bgr(hex_color: str, default: Tuple[int, int, int] = (255, 255, 255)) -> Tuple[int, int, int]:
@@ -188,6 +233,8 @@ def validate_and_normalize_drawing_payload(payload: Dict[str, Any]) -> Dict[str,
             
         if not cleaned_points:
             continue
+
+        cleaned_points = _trim_closed_loop_overshoot(cleaned_points)
             
         # Deduplicate accidental duplicate stroke objects in payload:
         # 1. By unique stroke ID (if present and non-empty)
@@ -216,7 +263,7 @@ def validate_and_normalize_drawing_payload(payload: Dict[str, Any]) -> Dict[str,
         for run_idx, run in enumerate(runs):
             # Very short residuals are rasterization noise, not a useful stroke.
             run_length = sum(math.hypot(b["x"] - a["x"], b["y"] - a["y"]) for a, b in zip(run, run[1:]))
-            if len(run) > 1 and run_length < 2.0 and not single_tap:
+            if len(run) > 1 and run_length < 4.0 and not single_tap:
                 continue
             out_id = stroke_id or f"stroke_{len(normalized_strokes)+1}"
             if len(runs) > 1:
@@ -250,7 +297,7 @@ def strokes_to_renderer_path(
     """
     Converts strokes into an ordered sequence of 2D coordinates with `None` delimiters,
     interpolating line segments to ensure continuous smooth pen trajectories.
-    Eliminates zero-length segments and redundant duplicate points.
+    Eliminates zero-length segments, redundant duplicate points, and consecutive delimiters.
     Returns: (path, point_colors, point_widths)
     """
     path: List[Optional[Tuple[int, int]]] = []
@@ -316,13 +363,28 @@ def strokes_to_renderer_path(
                         point_colors.append(color)
                         point_widths.append(width)
                         
-    # Strip trailing None delimiters
-    while path and path[-1] is None:
-        path.pop()
-        point_colors.pop()
-        point_widths.pop()
+    # Ensure no consecutive None delimiters or trailing/leading None
+    clean_path = []
+    clean_colors = []
+    clean_widths = []
+    for p, c, w in zip(path, point_colors, point_widths):
+        if p is None:
+            if clean_path and clean_path[-1] is not None:
+                clean_path.append(None)
+                clean_colors.append(None)
+                clean_widths.append(None)
+        else:
+            clean_path.append(p)
+            clean_colors.append(c)
+            clean_widths.append(w)
+
+    while clean_path and clean_path[-1] is None:
+        clean_path.pop()
+        clean_colors.pop()
+        clean_widths.pop()
                     
-    return path, point_colors, point_widths
+    return clean_path, clean_colors, clean_widths
+
 
 
 def render_strokes_to_sketch_image(

@@ -213,16 +213,16 @@ def background_job_worker():
                     except Exception:
                         pass
                         
-            # 5. Progressive Video Rendering
+            # 5. Progressive Video Rendering (2D: 25% -> 55%)
             with jobs_lock:
-                job["stage"] = "Rendering video"
-                job["progress"] = 35
+                job["stage"] = "Rendering 2D video"
+                job["progress"] = 25
                 
             def on_render_progress(percent, curr_f, total_f):
-                mapped = 35 + int(percent * 0.50)
+                mapped = 25 + int(percent * 0.30)
                 with jobs_lock:
-                    job["progress"] = min(85, mapped)
-                    job["stage"] = f"Rendering video ({int(percent)}%)"
+                    job["progress"] = min(55, mapped)
+                    job["stage"] = f"Rendering 2D video ({int(percent)}%)"
 
             render_kolam_video(
                 dots=dots,
@@ -241,10 +241,10 @@ def background_job_worker():
                 drawing_speed=float(payload.get("drawing_speed", 1.2))
             )
             
-            # 6. Audio Processing (Vocal Removal + BGM Muxing)
+            # 6. Audio Processing (Vocal Removal + BGM Muxing) (56%)
             with jobs_lock:
-                job["stage"] = "Processing background music"
-                job["progress"] = 88
+                job["stage"] = "Processing 2D background music"
+                job["progress"] = 56
                 
             music_dir = r"D:\ncs music"
             if os.path.exists(music_dir):
@@ -253,7 +253,7 @@ def background_job_worker():
                 except Exception as e:
                     print(f"[JOB {job_id}] Audio processing warning: {e}")
 
-            # 6b. 3D Video Rendering (same geometry and timeline, raised-powder style)
+            # 6b. 3D Video Rendering (same geometry and timeline, raised-powder style) (60% -> 90%)
             video_3d_filename = f"manual_{timestamp}_{job_id[:8]}_3d.mp4"
             video_3d_path = str(OUTPUTS_DIR / video_3d_filename)
             video_3d_success = False
@@ -261,7 +261,7 @@ def background_job_worker():
 
             with jobs_lock:
                 job["stage"] = "Rendering 3D video"
-                job["progress"] = 68
+                job["progress"] = 60
                 job["video_3d_status"] = "rendering"
 
             # Check ComfyUI availability
@@ -274,9 +274,9 @@ def background_job_worker():
                 print(f"[JOB {job_id}] ComfyUI not available: {comfyui_status.error_message}. Using deterministic 3D renderer.")
 
             def on_3d_progress(percent, curr_f, total_f):
-                mapped_3d = 68 + int(percent * 0.18)
+                mapped_3d = 60 + int(percent * 0.30)
                 with jobs_lock:
-                    job["progress"] = min(86, mapped_3d)
+                    job["progress"] = min(90, mapped_3d)
                     job["stage"] = f"Rendering 3D video ({int(percent)}%)"
 
             try:
@@ -299,6 +299,9 @@ def background_job_worker():
                 # Mux audio into 3D video too
                 if os.path.exists(music_dir):
                     try:
+                        with jobs_lock:
+                            job["stage"] = "Processing 3D background music"
+                            job["progress"] = 92
                         merge_instrumental_bgm(video_path=video_3d_path, music_dir=music_dir, volume=1.3)
                     except Exception as e:
                         print(f"[JOB {job_id}] 3D audio processing warning: {e}")
@@ -311,6 +314,7 @@ def background_job_worker():
                 with jobs_lock:
                     job["video_3d_status"] = "failed"
                     job["video_3d_error"] = str(e)
+
                     
             # 7. Dynamic SEO Metadata Generation
             with jobs_lock:

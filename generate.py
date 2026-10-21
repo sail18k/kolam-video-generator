@@ -22,9 +22,11 @@ from engine.classifier import classify_kolam_local_llm, classify_heuristic
 from engine.dot_generator import generate_custom_dots, generate_8x2_dots
 from engine.path_generator import generate_path_for_type
 from engine.renderer import render_kolam_video
+from engine.renderer_3d import render_kolam_video_3d
 from engine.thumbnail_generator import generate_kolam_thumbnail
 from engine.seo_generator import generate_dynamic_seo_metadata, save_metadata_to_file
 from engine.audio_processor import merge_instrumental_bgm, get_video_duration
+from engine.comfyui_bridge import discover_comfyui, get_enhancement_report
 
 def main():
     parser = argparse.ArgumentParser(description="Headless Kolam Video Generator - YouTube Shorts Ready")
@@ -37,6 +39,7 @@ def main():
     parser.add_argument("--no-hand", action="store_true", help="Disable hand overlay")
     parser.add_argument("--no-watermark", action="store_true", help="Disable footer watermark (Like, Share, Subscribe)")
     parser.add_argument("--no-thumbnail", action="store_true", help="Disable YouTube Short thumbnail generation")
+    parser.add_argument("--no-3d", action="store_true", help="Disable secondary 3D raised-powder video generation")
     parser.add_argument("--music-dir", default=r"D:\ncs music", help=r"Directory with background music (default: D:\ncs music)")
     parser.add_argument("--no-music", action="store_true", help="Disable adding background music")
     parser.add_argument("--music-volume", type=float, default=1.3, help="Music volume multiplier (default: 1.3)")
@@ -130,7 +133,7 @@ def main():
         drawing_speed=args.drawing_speed
     )
     
-    # 6. Merge Vocal-Removed Instrumental Background Music
+    # 6. Merge Vocal-Removed Instrumental Background Music for 2D
     if not args.no_music:
         print(f"\n[6/7] Merging Vocal-Removed Instrumental Background Music ({args.music_dir})...")
         merge_instrumental_bgm(
@@ -138,9 +141,46 @@ def main():
             music_dir=args.music_dir,
             volume=args.music_volume
         )
-            
+
+    # 6b. Secondary 3D Video (same validated geometry and animation timeline)
+    output_3d = None
+    if not args.no_3d:
+        base_no_ext, ext = os.path.splitext(output)
+        output_3d_path = f"{base_no_ext}_3d{ext}"
+        print(f"\n[6b/7] Rendering 3D raised-powder video ({output_3d_path})...")
+        comfyui_status = discover_comfyui()
+        if comfyui_status.usable:
+            print(f"  -> ComfyUI active on {comfyui_status.server_url}. Mode: comfyui_enhanced")
+        else:
+            print(f"  -> ComfyUI offline: {comfyui_status.error_message}. Mode: deterministic_local")
+
+        try:
+            output_3d = render_kolam_video_3d(
+                dots=dots,
+                path=path,
+                wood_path=wood_path,
+                hand_path=hand_path if not args.no_hand else "engine/assets/hand_raw.png",
+                output_path=output_3d_path,
+                fps=args.fps,
+                show_watermark=not args.no_watermark,
+                title=args.title,
+                cover_image_path=thumbnail_path,
+                drawing_speed=args.drawing_speed
+            )
+            if not args.no_music:
+                merge_instrumental_bgm(
+                    video_path=output_3d,
+                    music_dir=args.music_dir,
+                    volume=args.music_volume
+                )
+            print(f"  -> 3D Video saved: {output_3d}")
+        except Exception as e:
+            print(f"  -> Warning: 3D video rendering failed: {e}. 2D video remains valid.")
+
     print("\n=== DONE ===")
-    print(f"Video: {output}")
+    print(f"2D Video: {output}")
+    if output_3d:
+        print(f"3D Video: {output_3d}")
     if thumbnail_path:
         print(f"Thumbnail: {thumbnail_path}")
     print(f"Ready to upload to YouTube Shorts!")

@@ -82,6 +82,9 @@ def discover_comfyui() -> ComfyUIStatus:
 
     # 1. Check common installation paths
     common_paths = [
+        Path("D:/AI Youtub/ComfyUI"),
+        Path("C:/ComfyUI_windows_portable/ComfyUI"),
+        Path("D:/ComfyUI_windows_portable/ComfyUI"),
         Path("C:/ComfyUI"),
         Path("D:/ComfyUI"),
         Path(os.path.expanduser("~/ComfyUI")),
@@ -91,13 +94,25 @@ def discover_comfyui() -> ComfyUIStatus:
     if comfyui_env:
         common_paths.insert(0, Path(comfyui_env))
 
+    install_dir = None
     for p in common_paths:
-        if p.exists() and (p / "main.py").exists():
+        if p.exists() and ((p / "main.py").exists() or (p / "comfy").is_dir()):
             status.installed = True
+            install_dir = p
             break
-        if p.exists() and (p / "comfy").is_dir():
-            status.installed = True
-            break
+
+    # If installed on disk, discover local models and custom nodes even if server is offline
+    if install_dir:
+        ckpt_dir = install_dir / "models" / "checkpoints"
+        if ckpt_dir.is_dir():
+            ckpts = [f.name for f in ckpt_dir.iterdir() if f.is_file() and f.suffix in (".safetensors", ".ckpt", ".pt")]
+            if ckpts:
+                status.models_available = ckpts[:20]
+        nodes_dir = install_dir / "custom_nodes"
+        if nodes_dir.is_dir():
+            nodes = [d.name for d in nodes_dir.iterdir() if d.is_dir() and not d.name.startswith(".")]
+            if nodes:
+                status.custom_nodes = nodes[:20]
 
     # 2. Check server health
     try:
@@ -114,11 +129,14 @@ def discover_comfyui() -> ComfyUIStatus:
                     if vram_total > 0:
                         status.vram_mb = int(vram_total / (1024 * 1024))
     except urllib.error.URLError:
-        status.error_message = f"ComfyUI server not reachable at {base_url}"
+        if status.installed:
+            status.error_message = f"ComfyUI installed at {install_dir}, but server is not running on {base_url}."
+        else:
+            status.error_message = f"ComfyUI server not reachable at {base_url}."
     except Exception as e:
         status.error_message = f"ComfyUI discovery error: {str(e)}"
 
-    # 3. Check available models
+    # 3. Check live models from API if reachable
     if status.api_reachable:
         try:
             req = urllib.request.Request(f"{base_url}/object_info", method="GET")
@@ -155,6 +173,7 @@ def discover_comfyui() -> ComfyUIStatus:
         )
 
     return status
+
 
 
 def submit_workflow(workflow: Dict[str, Any], timeout: int = 120) -> Tuple[bool, str, Dict[str, Any]]:
