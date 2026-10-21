@@ -405,10 +405,6 @@ def overlay_hand(background, hand_img, pen_tip_pos, angle_offset=0):
     if hand_img is None:
         return background
     
-    # Pen tip is at bottom of hand image (approx)
-    # In our hand image, pen tip is at bottom-left
-    # We want to align tip to pen_tip_pos
-    
     # Estimate tip offset in hand image: near bottom center
     hh, hw = hand_img.shape[:2]
     tip_in_hand = (hw//3, hh - 30)  # approx tip location in hand image
@@ -419,29 +415,25 @@ def overlay_hand(background, hand_img, pen_tip_pos, angle_offset=0):
     
     # Clip to background bounds
     bg_h, bg_w = background.shape[:2]
+    h_hand, w_hand = hand_img.shape[:2]
+    x1, y1 = max(0, x), max(0, y)
+    x2 = min(bg_w, x + w_hand)
+    y2 = min(bg_h, y + h_hand)
+    if x2 <= x1 or y2 <= y1:
+        return background
     
-    # Overlay with alpha blending
-    for c in range(3):
-        # Get region
-        x1, y1 = max(0, x), max(0, y)
-        x2, y2 = min(bg_w, x+hw), min(bg_h, y+hh)  # Note: hand w/h swapped? Actually hw is width
-        # Correct: hand_img shape is (h,w,4)
-        h_hand, w_hand = hand_img.shape[:2]
-        x2 = min(bg_w, x + w_hand)
-        y2 = min(bg_h, y + h_hand)
-        if x2 <= x1 or y2 <= y1:
-            continue
-        # Corresponding hand region
-        hx1, hy1 = x1 - x, y1 - y
-        hx2, hy2 = hx1 + (x2-x1), hy1 + (y2-y1)
-        
-        hand_crop = hand_img[hy1:hy2, hx1:hx2]
-        if hand_crop.shape[2] == 4:
-            alpha = hand_crop[:,:,3] / 255.0
-            for ch in range(3):
-                background[y1:y2, x1:x2, ch] = (1-alpha)*background[y1:y2, x1:x2, ch] + alpha*hand_crop[:,:,ch]
-        else:
-            background[y1:y2, x1:x2] = hand_crop[:,:,:3]
+    # Corresponding hand region
+    hx1, hy1 = x1 - x, y1 - y
+    hx2, hy2 = hx1 + (x2-x1), hy1 + (y2-y1)
+    
+    hand_crop = hand_img[hy1:hy2, hx1:hx2]
+    if hand_crop.shape[2] == 4:
+        alpha = (hand_crop[:,:,3].astype(np.float32) / 255.0)[:,:,np.newaxis]
+        bg_roi = background[y1:y2, x1:x2].astype(np.float32)
+        fg = hand_crop[:,:,:3].astype(np.float32)
+        background[y1:y2, x1:x2] = ((1.0 - alpha) * bg_roi + alpha * fg).astype(np.uint8)
+    else:
+        background[y1:y2, x1:x2] = hand_crop[:,:,:3]
     
     return background
 
@@ -681,7 +673,11 @@ def render_kolam_video(dots, path, wood_path, hand_path, output_path, fps=25, li
                     cv2.line(canvas, last_rendered_pt, curr_pt, c, w, lineType=cv2.LINE_AA)
                     last_rendered_pt = curr_pt
                 
-                last_rendered_idx = target_i - 1
+                # Keep last_rendered_idx at the last fully-traversed vertex so
+                # the next frame does not re-draw segments already on the canvas.
+                # target_i is the segment endpoint; if the interpolated point
+                # hasn't reached it yet, the last completed vertex is target_i-1.
+                last_rendered_idx = max(last_rendered_idx, target_i - 1)
                 last_rendered_dist = target_dist
                 tip_pos = curr_pt
                 

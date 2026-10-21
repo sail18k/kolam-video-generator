@@ -49,9 +49,11 @@ from engine.reference_alignment import (
 )
 from engine.dot_generator import generate_custom_dots
 from engine.renderer import render_kolam_video
+from engine.renderer_3d import render_kolam_video_3d
 from engine.thumbnail_generator import generate_kolam_thumbnail
 from engine.audio_processor import merge_instrumental_bgm, get_video_duration
 from engine.seo_generator import generate_dynamic_seo_metadata, save_metadata_to_file
+from engine.comfyui_bridge import discover_comfyui, get_enhancement_report
 
 # Initialize Flask application
 app = Flask(
@@ -250,6 +252,65 @@ def background_job_worker():
                     merge_instrumental_bgm(video_path=video_path, music_dir=music_dir, volume=1.3)
                 except Exception as e:
                     print(f"[JOB {job_id}] Audio processing warning: {e}")
+
+            # 6b. 3D Video Rendering (same geometry and timeline, raised-powder style)
+            video_3d_filename = f"manual_{timestamp}_{job_id[:8]}_3d.mp4"
+            video_3d_path = str(OUTPUTS_DIR / video_3d_filename)
+            video_3d_success = False
+            rendering_mode = "deterministic_local"
+
+            with jobs_lock:
+                job["stage"] = "Rendering 3D video"
+                job["progress"] = 68
+                job["video_3d_status"] = "rendering"
+
+            # Check ComfyUI availability
+            comfyui_status = discover_comfyui()
+            enhancement_report = get_enhancement_report(comfyui_status)
+            if comfyui_status.usable:
+                rendering_mode = "comfyui_enhanced"
+                print(f"[JOB {job_id}] ComfyUI detected at {comfyui_status.server_url} with {len(comfyui_status.models_available)} models")
+            else:
+                print(f"[JOB {job_id}] ComfyUI not available: {comfyui_status.error_message}. Using deterministic 3D renderer.")
+
+            def on_3d_progress(percent, curr_f, total_f):
+                mapped_3d = 68 + int(percent * 0.18)
+                with jobs_lock:
+                    job["progress"] = min(86, mapped_3d)
+                    job["stage"] = f"Rendering 3D video ({int(percent)}%)"
+
+            try:
+                render_kolam_video_3d(
+                    dots=dots,
+                    path=path,
+                    wood_path=wood_path,
+                    hand_path=hand_path,
+                    output_path=video_3d_path,
+                    fps=25,
+                    line_thickness=6,
+                    show_watermark=True,
+                    title=title,
+                    cover_image_path=thumbnail_generated,
+                    point_colors=point_colors,
+                    point_widths=point_widths,
+                    progress_callback=on_3d_progress,
+                    drawing_speed=float(payload.get("drawing_speed", 1.2))
+                )
+                # Mux audio into 3D video too
+                if os.path.exists(music_dir):
+                    try:
+                        merge_instrumental_bgm(video_path=video_3d_path, music_dir=music_dir, volume=1.3)
+                    except Exception as e:
+                        print(f"[JOB {job_id}] 3D audio processing warning: {e}")
+                video_3d_success = True
+                print(f"[JOB {job_id}] 3D video rendered successfully: {video_3d_filename}")
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                print(f"[JOB {job_id}] 3D rendering failed: {e}. 2D video is still valid.")
+                with jobs_lock:
+                    job["video_3d_status"] = "failed"
+                    job["video_3d_error"] = str(e)
                     
             # 7. Dynamic SEO Metadata Generation
             with jobs_lock:
@@ -293,6 +354,12 @@ def background_job_worker():
                 job["meta_dict"] = meta_dict
                 job["video_url"] = f"/api/jobs/{job_id}/video"
                 job["thumbnail_url"] = f"/api/jobs/{job_id}/thumbnail" if thumbnail_generated else None
+                # 3D video fields
+                job["video_3d_filename"] = video_3d_filename if video_3d_success else None
+                job["video_3d_url"] = f"/api/jobs/{job_id}/video3d" if video_3d_success else None
+                job["video_3d_status"] = "completed" if video_3d_success else job.get("video_3d_status", "failed")
+                job["rendering_mode"] = rendering_mode
+                job["enhancement_report"] = enhancement_report
                 
         except Exception as e:
             import traceback
@@ -434,7 +501,12 @@ def get_job_status(job_id: str):
             "error": job.get("error"),
             "video_url": job.get("video_url"),
             "thumbnail_url": job.get("thumbnail_url"),
-            "meta_dict": job.get("meta_dict")
+            "meta_dict": job.get("meta_dict"),
+            # 3D video fields
+            "video_3d_url": job.get("video_3d_url"),
+            "video_3d_status": job.get("video_3d_status"),
+            "video_3d_error": job.get("video_3d_error"),
+            "rendering_mode": job.get("rendering_mode"),
         })
 
 
@@ -470,6 +542,24 @@ def get_job_thumbnail(job_id: str):
         return jsonify({"error": "Thumbnail file not found on disk"}), 404
         
     return send_file(str(target), mimetype="image/jpeg", as_attachment=False)
+
+
+@app.route("/api/jobs/<job_id>/video3d", methods=["GET"])
+def get_job_video_3d(job_id: str):
+    """Streams the completed 3D-enhanced MP4 video."""
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job or job.get("status") != "completed":
+            return jsonify({"error": "Video not ready or job not found"}), 404
+        video_3d_filename = job.get("video_3d_filename")
+        if not video_3d_filename:
+            return jsonify({"error": "3D video not available for this job"}), 404
+
+    target = OUTPUTS_DIR / video_3d_filename
+    if not target.exists():
+        return jsonify({"error": "3D video file not found on disk"}), 404
+
+    return send_file(str(target), mimetype="video/mp4", as_attachment=False)
 
 
 def run_server(host: str = "0.0.0.0", port: int = 8000, drawing_speed: float = 1.2):
